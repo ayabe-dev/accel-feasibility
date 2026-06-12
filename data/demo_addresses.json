@@ -1,0 +1,62 @@
+{
+  "東京都新宿区西新宿2-8-1": {
+    "latitude": 35.6896,
+    "longitude": 139.6917,
+    "zoning_code": "commercial",
+    "zoning_name": "商業地域",
+    "fire_district": "fire_district",
+    "coverage_ratio_pct": 80,
+    "floor_area_ratio_pct": 1000,
+    "notes": ["デモデータ（東京都庁周辺）"]
+  },
+  "東京都渋谷区道玄坂1-1-1": {
+    "latitude": 35.6580,
+    "longitude": 139.7016,
+    "zoning_code": "commercial",
+    "zoning_name": "商業地域",
+    "fire_district": "fire_district",
+    "coverage_ratio_pct": 80,
+    "floor_area_ratio_pct": 800,
+    "notes": ["デモデータ（渋谷駅周辺）"]
+  },
+  "東京都世田谷区成城6-5-34": {
+    "latitude": 35.6479,
+    "longitude": 139.5996,
+    "zoning_code": "first_low_residential",
+    "zoning_name": "第一種低層住居専用地域",
+    "fire_district": "no_district",
+    "coverage_ratio_pct": 40,
+    "floor_area_ratio_pct": 80,
+    "notes": ["デモデータ（成城学園周辺・住宅専用エリア）"]
+  },
+  "東京都目黒区中目黒1-1-1": {
+    "latitude": 35.6447,
+    "longitude": 139.6996,
+    "zoning_code": "first_residential",
+    "zoning_name": "第一種住居地域",
+    "fire_district": "quasi_fire_district",
+    "coverage_ratio_pct": 60,
+    "floor_area_ratio_pct": 300,
+    "notes": ["デモデータ（中目黒）"]
+  },
+  "東京都港区六本木6-10-1": {
+    "latitude": 35.6604,
+    "longitude": 139.7292,
+    "zoning_code": "commercial",
+    "zoning_name": "商業地域",
+    "fire_district": "fire_district",
+    "coverage_ratio_pct": 80,
+    "floor_area_ratio_pct": 700,
+    "notes": ["デモデータ（六本木ヒルズ周辺）"]
+  },
+  "京都府京都市東山区祇園町南側": {
+    "latitude": 35.0036,
+    "longitude": 135.7782,
+    "zoning_code": "commercial",
+    "zoning_name": "商業地域",
+    "fire_district": "fire_district",
+    "coverage_ratio_pct": 80,
+    "floor_area_ratio_pct": 400,
+    "notes": ["デモデータ（祇園・京都市条例の上乗せ規制あり）"]
+  }
+}

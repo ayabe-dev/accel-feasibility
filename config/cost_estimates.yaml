@@ -1,0 +1,166 @@
+# パターン別 概算費用・期間レンジ
+# 単位：万円、月
+# あくまで一次スクリーニング用の目安。最終見積は個別案件で精査。
+
+patterns:
+  A:
+    name: "検査済証あり / 築浅 / 図書完備 / 改修履歴なし"
+    investigation:
+      cost_min: 30
+      cost_max: 80
+      months_min: 1
+      months_max: 2
+      tasks: ["既存図面整合確認", "現地照合（軽）"]
+    application:
+      cost_min: 80
+      cost_max: 200
+      months_min: 2
+      months_max: 4
+      tasks: ["用途変更確認申請（200㎡超の場合）", "事前協議"]
+    renovation:
+      cost_min: 500
+      cost_max: 3000
+      months_min: 2
+      months_max: 4
+      tasks: ["内装制限対応", "消防設備（自火報・誘導灯）", "客室仕様"]
+    total:
+      months_min: 5
+      months_max: 10
+      confidence: "高"
+
+  B:
+    name: "検査済証あり / 中間 / 一部欠落 / 改修履歴あり"
+    investigation:
+      cost_min: 80
+      cost_max: 200
+      months_min: 2
+      months_max: 4
+      tasks: ["既存図面復元", "現地実測", "既存不適格項目整理"]
+    application:
+      cost_min: 150
+      cost_max: 350
+      months_min: 3
+      months_max: 5
+      tasks: ["用途変更確認申請", "事前協議", "消防同意"]
+    renovation:
+      cost_min: 1000
+      cost_max: 5000
+      months_min: 3
+      months_max: 6
+      tasks: ["内装改修", "防火区画追加の可能性", "消防設備一式", "排煙・採光対応"]
+    total:
+      months_min: 8
+      months_max: 15
+      confidence: "中"
+
+  C:
+    name: "検査済証あり / 築古 / 図書散逸 / 改修履歴あり（実質ガイドライン相当）"
+    investigation:
+      cost_min: 200
+      cost_max: 500
+      months_min: 3
+      months_max: 6
+      tasks: ["ガイドライン調査相当", "図面復元", "構造健全性確認", "実測"]
+    application:
+      cost_min: 200
+      cost_max: 500
+      months_min: 4
+      months_max: 7
+      tasks: ["用途変更確認申請", "既存不適格遡及対応", "事前協議の長期化見込み"]
+    renovation:
+      cost_min: 2000
+      cost_max: 10000
+      months_min: 4
+      months_max: 9
+      tasks: ["大規模改修見込み", "構造補強の可能性", "防火区画・避難経路の再構築"]
+    total:
+      months_min: 11
+      months_max: 22
+      confidence: "中"
+
+  D:
+    name: "検査済証なし（ガイドライン調査フル実施）"
+    investigation:
+      cost_min: 300
+      cost_max: 800
+      months_min: 4
+      months_max: 8
+      tasks: ["指定確認検査機関への事前相談", "図面復元", "現地実測", "構造調査", "法適合状況調査報告書"]
+    application:
+      cost_min: 250
+      cost_max: 600
+      months_min: 4
+      months_max: 8
+      tasks: ["用途変更確認申請", "報告書ベースの審査", "事前協議"]
+    renovation:
+      cost_min: 3000
+      cost_max: 15000
+      months_min: 5
+      months_max: 12
+      tasks: ["大規模改修見込み", "構造補強の蓋然性高", "全館の防火・避難計画見直し"]
+    total:
+      months_min: 13
+      months_max: 28
+      confidence: "低（個別精査必須）"
+
+# 業態別の追加コスト
+business_type_adjustments:
+  hotel_ryokan:
+    name: "旅館・ホテル営業"
+    extra_cost_min: 0
+    extra_cost_max: 0
+    notes:
+      - "客室面積：7㎡以上（寝台のみ9㎡以上）"
+      - "玄関帳場（フロント）必要、ICT代替は自治体ごとに運用差"
+      - "消防：自火報は原則全件、SP は11階以上または3,000㎡以上"
+
+# 構造別の改修コスト調整係数
+# patterns.*.renovation の cost_min/max にこの係数を掛ける（積み増し方向）
+structure_multipliers:
+  wooden:
+    name: "木造"
+    multiplier: 1.0
+    note: "基本は標準。築古は構造補強で増額の可能性"
+  rc:
+    name: "RC造（鉄筋コンクリート）"
+    multiplier: 1.15
+    note: "解体・はつり工事の手間で15%増"
+  src:
+    name: "SRC造（鉄骨鉄筋コンクリート）"
+    multiplier: 1.25
+    note: "RC造より重量・解体難度が高く25%増"
+  s_steel:
+    name: "S造（鉄骨）"
+    multiplier: 1.10
+    note: "耐火被覆の追加コストで10%増"
+
+# 規模別の概算坪単価帯（参考。客室仕様により幅）
+unit_cost_per_tsubo:
+  budget_simple:
+    name: "シンプル改修"
+    range_min: 30
+    range_max: 60
+    note: "既存内装活用、設備最小限"
+  standard:
+    name: "標準改修"
+    range_min: 60
+    range_max: 120
+    note: "客室仕様統一、消防設備一式更新"
+  premium:
+    name: "ハイグレード改修"
+    range_min: 120
+    range_max: 250
+    note: "ホテルブランド準拠、内装フル更新"
+
+# 規模別の追加考慮事項
+scale_thresholds:
+  under_200m2:
+    note: "用途変更確認申請は原則不要（2019年法改正以降）。ただし建基法・消防法の遡及あり。"
+  m2_200_to_500:
+    note: "用途変更確認申請が必要。比較的シンプル。"
+  m2_500_to_1000:
+    note: "排煙設備・避難規定で追加検討増加。"
+  over_1000m2:
+    note: "避難安全検証法の活用検討、大規模建築物の構造規定要確認。"
+  over_3000m2:
+    note: "第一種住居地域では立地不可。スプリンクラー設置義務（用途・無窓階等で閾値変動）。"

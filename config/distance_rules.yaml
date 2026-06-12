@@ -1,0 +1,37 @@
+# 距離規制ルール
+# 根拠：旅館業法3条3項・4項、各自治体条例
+# 学校等から概ね100m以内に旅館・ホテルを設置する場合、知事の意見聴取が必要となるケースあり
+# ※ 距離・対象施設は自治体ごとに差があるため、対象自治体ごとに上書きする想定
+
+default:
+  distance_meters: 100
+  target_facilities:
+    - 幼稚園
+    - 小学校
+    - 中学校
+    - 高等学校
+    - 特別支援学校
+    - 児童福祉施設（保育所など）
+    - 図書館
+    - 博物館
+  action_required: "都道府県知事への意見聴取（旅館業法3条3項・4項）"
+
+# 自治体別の上乗せ規制例
+municipalities:
+  kyoto_city:
+    name: "京都市"
+    distance_meters: 100
+    extra_facilities:
+      - 児童遊園
+      - 公民館
+    note: "京都市旅館業の施設の構造設備の基準等に関する条例"
+
+  shinjuku_ku:
+    name: "新宿区"
+    distance_meters: 100
+    note: "新宿区旅館業法施行条例。商業地域では一部緩和あり。"
+
+  shibuya_ku:
+    name: "渋谷区"
+    distance_meters: 100
+    note: "渋谷区旅館業法施行条例"

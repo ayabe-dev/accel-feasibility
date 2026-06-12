@@ -1,0 +1,49 @@
+# --- Secrets (絶対に push しない) ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- Streamlit ---
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# --- Build artifacts ---
+build/
+dist/
+*.egg-info/
+
+# --- Local data / cache ---
+data/cache/
+*.log
+nohup.out
+
+# --- ngrok (Cloud では不要) ---
+.ngrok2/
+
+# --- Generated reports / PDFs ---
+*.pdf
+!docs/**/*.pdf
+*_report.html
+!sample_*.html

@@ -1,0 +1,121 @@
+# 用途地域 × 業態 可否ルール
+# 根拠：建築基準法48条 / 別表第二
+# 業態：旅館・ホテル営業（旅館業法）
+#
+# status:
+#   allowed       立地可
+#   conditional   条件付き可（規模制限あり）
+#   prohibited    立地不可（48条本則）
+#   special_only  特定行政庁の許可があれば可（48条ただし書き）
+
+zoning_areas:
+  first_low_residential:
+    code: "1低層"
+    name: "第一種低層住居専用地域"
+    hotel:
+      status: prohibited
+      reason: "別表第二（い）項。住宅・小規模店舗等のみ。"
+
+  second_low_residential:
+    code: "2低層"
+    name: "第二種低層住居専用地域"
+    hotel:
+      status: prohibited
+      reason: "別表第二（ろ）項。小規模店舗まで。旅館・ホテル不可。"
+
+  rural_residential:
+    code: "田園"
+    name: "田園住居地域"
+    hotel:
+      status: prohibited
+      reason: "別表第二（ち）項。住宅と農業関連施設のみ。"
+
+  first_mid_residential:
+    code: "1中高"
+    name: "第一種中高層住居専用地域"
+    hotel:
+      status: prohibited
+      reason: "別表第二（は）項。中高層住宅と附属施設のみ。"
+
+  second_mid_residential:
+    code: "2中高"
+    name: "第二種中高層住居専用地域"
+    hotel:
+      status: prohibited
+      reason: "別表第二（に）項。事務所等は条件付き可だが旅館・ホテルは不可。"
+
+  first_residential:
+    code: "1住居"
+    name: "第一種住居地域"
+    hotel:
+      status: conditional
+      max_floor_area_m2: 3000
+      reason: "別表第二（ほ）項。床面積3,000㎡以下に限り可。"
+
+  second_residential:
+    code: "2住居"
+    name: "第二種住居地域"
+    hotel:
+      status: allowed
+      reason: "別表第二（へ）項。原則可。"
+
+  quasi_residential:
+    code: "準住居"
+    name: "準住居地域"
+    hotel:
+      status: allowed
+      reason: "別表第二（と）項。原則可。"
+
+  neighborhood_commercial:
+    code: "近商"
+    name: "近隣商業地域"
+    hotel:
+      status: allowed
+      reason: "別表第二（り）項。原則可。"
+
+  commercial:
+    code: "商業"
+    name: "商業地域"
+    hotel:
+      status: allowed
+      reason: "別表第二（ぬ）項。原則可。"
+
+  quasi_industrial:
+    code: "準工"
+    name: "準工業地域"
+    hotel:
+      status: allowed
+      reason: "別表第二（る）項。原則可。"
+
+  industrial:
+    code: "工業"
+    name: "工業地域"
+    hotel:
+      status: prohibited
+      reason: "別表第二（を）項。旅館・ホテル不可。"
+
+  exclusive_industrial:
+    code: "工専"
+    name: "工業専用地域"
+    hotel:
+      status: prohibited
+      reason: "別表第二（わ）項。住宅・旅館・ホテル不可。"
+
+  non_zoned:
+    code: "未指定"
+    name: "用途地域指定なし"
+    hotel:
+      status: allowed
+      reason: "市街化調整区域や非線引き区域。原則可だが、市街化調整区域は別途許可が必要。"
+
+# 防火地域による構造要件への影響（参考）
+fire_protection_areas:
+  fire_district:
+    name: "防火地域"
+    note: "原則として耐火建築物等が必要。3階以上または延床100㎡超は耐火建築物。"
+  quasi_fire_district:
+    name: "準防火地域"
+    note: "規模・階数により耐火・準耐火建築物の要否が決まる。"
+  no_district:
+    name: "指定なし"
+    note: "建基法27条の特殊建築物規定のみ適用。"

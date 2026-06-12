@@ -1,0 +1,15 @@
+[browser]
+gatherUsageStats = false
+
+[server]
+# Streamlit Cloud では headless=true / port は自動。ローカル時は ENV STREAMLIT_SERVER_HEADLESS で上書きも可
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+maxUploadSize = 50
+
+[theme]
+primaryColor = "#1a3a6e"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f4fa"
+textColor = "#222222"

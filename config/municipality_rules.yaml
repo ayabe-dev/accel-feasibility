@@ -1,0 +1,185 @@
+# 自治体の旅館業法上乗せ条例DB
+# 出典：各自治体の旅館業法施行条例。改正で変動するため、運用時は最新版を確認すること。
+
+municipalities:
+  # ---------- 東京23区 ----------
+  shinjuku_ku:
+    name: "新宿区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校・児童福祉施設・図書館・博物館等から100m以内は意見聴取。商業地域は一部緩和あり"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+      note: "東京都条例に準拠（標準）"
+    front_desk:
+      note: "ICT代替設備可。緊急時10分以内駆け付け体制"
+    matched_address_prefixes: ["東京都新宿区"]
+
+  shibuya_ku:
+    name: "渋谷区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+      note: "東京都条例に準拠"
+    front_desk:
+      note: "ICT代替設備可"
+    matched_address_prefixes: ["東京都渋谷区"]
+
+  minato_ku:
+    name: "港区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+      note: "東京都条例に準拠"
+    front_desk:
+      note: "ICT代替設備可"
+    matched_address_prefixes: ["東京都港区"]
+
+  chiyoda_ku:
+    name: "千代田区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+      note: "東京都条例に準拠"
+    front_desk:
+      note: "ICT代替設備可"
+    matched_address_prefixes: ["東京都千代田区"]
+
+  chuo_ku:
+    name: "中央区（東京）"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+      note: "東京都条例に準拠"
+    matched_address_prefixes: ["東京都中央区"]
+
+  meguro_ku:
+    name: "目黒区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+      note: "東京都条例に準拠"
+    matched_address_prefixes: ["東京都目黒区"]
+
+  shinagawa_ku:
+    name: "品川区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+    matched_address_prefixes: ["東京都品川区"]
+
+  setagaya_ku:
+    name: "世田谷区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+    matched_address_prefixes: ["東京都世田谷区"]
+
+  taito_ku:
+    name: "台東区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+    matched_address_prefixes: ["東京都台東区"]
+
+  sumida_ku:
+    name: "墨田区"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等から100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+    matched_address_prefixes: ["東京都墨田区"]
+
+  # ---------- 京都市 ----------
+  kyoto_city:
+    name: "京都市"
+    distance_to_school:
+      distance_m: 100
+      note: "学校・児童遊園・公民館等100m以内は許可不可または意見聴取（京都市旅館業条例）"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+      note: "京都市旅館業の施設の構造設備の基準等に関する条例"
+    front_desk:
+      note: "原則として玄関帳場必須。簡易宿所のICT代替は厳格運用"
+    extra_rules:
+      - "宿泊者名簿は和文で備置き、3年保存"
+      - "周辺住民への説明会開催義務（10室以上等）"
+    matched_address_prefixes: ["京都府京都市"]
+
+  # ---------- 大阪市 ----------
+  osaka_city:
+    name: "大阪市"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等100m以内は意見聴取（大阪市旅館業法施行条例）"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+    front_desk:
+      note: "ICT代替設備可"
+    matched_address_prefixes: ["大阪府大阪市"]
+
+  # ---------- 横浜市 ----------
+  yokohama_city:
+    name: "横浜市"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+    matched_address_prefixes: ["神奈川県横浜市"]
+
+  # ---------- 福岡市 ----------
+  fukuoka_city:
+    name: "福岡市"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+    matched_address_prefixes: ["福岡県福岡市"]
+
+  # ---------- 札幌市 ----------
+  sapporo_city:
+    name: "札幌市"
+    distance_to_school:
+      distance_m: 100
+      note: "学校等100m以内は意見聴取"
+    room_area:
+      min_m2: 7.0
+      bed_only_min_m2: 9.0
+    matched_address_prefixes: ["北海道札幌市"]
+
+
+# 住所からの自治体キー自動判定用ヘルパー
+# 「matched_address_prefixes」のいずれかで前方一致したものを返す
