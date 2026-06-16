@@ -22,6 +22,7 @@ except Exception:
     pass
 
 from core import judgment
+from core import profitability
 from core.document_parser import from_streamlit_uploaded_file, parse_document
 from core.models import (
     BusinessType,
@@ -508,7 +509,7 @@ def render_report(report) -> None:
             st.metric("総合スコア", f"{score.total:.1f} / 100", delta=f"Grade {score.grade}")
 
     # 詳細タブ
-    tab_score, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+    tab_score, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab_profit = st.tabs(
         [
             "🎯 スコア",
             "📍 立地",
@@ -519,6 +520,7 @@ def render_report(report) -> None:
             "🚒 消防・旅館業",
             "📝 TODO・不足書類",
             "📄 抽出書類",
+            "💹 収益性",
         ]
     )
 
@@ -821,6 +823,10 @@ def render_report(report) -> None:
                             st.warning(w)
 
 
+    with tab_profit:
+        render_profitability_tab(report)
+
+
 # ---------------------------------------------------------------------------
 # ヘルパー
 # ---------------------------------------------------------------------------
@@ -1010,3 +1016,159 @@ def _fire_label(code: str) -> str:
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# 収益性タブ
+# ---------------------------------------------------------------------------
+
+
+def render_profitability_tab(report) -> None:
+    """収益性分析（前提明示型の試算）タブ."""
+    st.markdown("### 💹 収益性分析")
+    st.caption(
+        "⚠️ 本結果は **前提明示型の試算（estimate）** です。鑑定評価・融資審査の代替ではありません。"
+        "数値はエリア相場のデフォルトに基づく概算で、必ずレンジ（弱気〜強気）で確認してください。"
+    )
+
+    inp = report.input
+    # --- 前提の上書き（任意） ---
+    with st.expander("⚙️ 前提を調整（任意・空欄ならエリア相場で自動）", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            land_area = st.number_input(
+                "土地面積（㎡・原価法/理論最大床に使用）", min_value=0.0, value=0.0, step=10.0,
+                key="prof_land_area",
+            )
+            room_area = st.number_input(
+                "1室面積（㎡・小さいほど客室数増）", min_value=0.0, value=0.0, step=1.0,
+                key="prof_room_area",
+            )
+        with c2:
+            purchase_price = st.number_input(
+                "想定取得価格（万円・空欄=収益価格)", min_value=0.0, value=0.0, step=100.0,
+                key="prof_price",
+            )
+            ltv = st.slider("LTV（借入比率）", 0.0, 1.0, 0.70, 0.05, key="prof_ltv")
+        with c3:
+            loan_rate = st.slider("借入金利", 0.0, 0.08, 0.025, 0.005, key="prof_rate")
+            loan_term = st.number_input(
+                "借入期間（年）", min_value=1, max_value=50, value=25, step=1, key="prof_term",
+            )
+        exit_year = st.slider("出口（売却）想定年", 1, 30, 10, 1, key="prof_exit")
+
+    overrides = {
+        "land_area_m2": land_area or None,
+        "room_area_m2": room_area or None,
+        "purchase_price_man": purchase_price or None,
+        "ltv": ltv,
+        "loan_rate": loan_rate,
+        "loan_term_years": int(loan_term),
+        "exit_year": int(exit_year),
+    }
+
+    try:
+        res = profitability.compute(report, overrides=overrides)
+    except Exception as e:  # noqa: BLE001
+        st.error(f"収益性計算でエラー：{e}")
+        return
+    report.profitability = res
+
+    # 警告
+    for w in res.get("warnings", []):
+        st.warning(w)
+
+    # 結論サマリ
+    st.markdown("#### 結論サマリ")
+    cols = st.columns(4)
+    iv = res["income_value_man"]
+    noi = res["noi"]
+    with cols[0]:
+        st.metric("収益価格 [A]（万円・mid）", f"{iv['mid']:,.0f}",
+                  help=f"レンジ {iv['min']:,.0f}〜{iv['max']:,.0f}（Inwood有期還元）")
+    with cols[1]:
+        cv = res["cost_value_man"]
+        st.metric("原価法 [B]（万円）", f"{cv:,.0f}" if cv is not None else "土地面積要入力")
+    with cols[2]:
+        st.metric("NOI（万円・mid）", f"{noi['mid']:,.0f}",
+                  help=f"レンジ {noi['min']:,.0f}〜{noi['max']:,.0f}")
+    with cols[3]:
+        st.metric("儲かりやすさ判定", res["verdict"])
+
+    st.caption(
+        f"エリア: {res['area_tier']}／構造: {res['structure']}／業態: {res['business_type']}"
+        f"／営業日: {res['operating_days_used']}日／客室: {res['rooms']}室"
+        f"／残存耐用: {res['remaining_useful_life_years']}年"
+        f"／設定version: {res['config_version']}（{res['as_of']}）"
+    )
+
+    # 投資指標・CF
+    st.markdown("#### CF・融資指標（税引前）")
+    fin = res["financing"]
+    def _f(v, p=2, suf=""):
+        return f"{v:.{p}f}{suf}" if isinstance(v, (int, float)) else "—"
+    rows = {
+        "シナリオ": ["弱気(min)", "標準(mid)", "強気(max)"],
+        "DSCR": [_f(fin[k]["dscr"]) for k in ("min", "mid", "max")],
+        "返済比率(対EGI)": [_f((fin[k]["repayment_ratio"] or 0) * 100, 1, "%") for k in ("min", "mid", "max")],
+        "年間CF(万円)": [_f(fin[k]["pretax_cf"], 0) for k in ("min", "mid", "max")],
+        "回収年数": [_f(fin[k]["payback_years"], 1) for k in ("min", "mid", "max")],
+        "表面利回り": [_f((fin[k]["gross_yield"] or 0) * 100, 1, "%") for k in ("min", "mid", "max")],
+        "NOI利回り": [_f((fin[k]["noi_yield"] or 0) * 100, 1, "%") for k in ("min", "mid", "max")],
+    }
+    st.table(rows)
+    a = res["assumptions"]
+    st.caption(
+        f"想定取得価格 {a['price_assumption_man']:,.0f}万円"
+        f"（{'手入力' if a['price_is_override'] else '収益価格midを仮定'}）"
+        f"／借入 {a['loan_man']:,.0f}万円・自己資金 {a['equity_man']:,.0f}万円"
+        f"／金利 {a['loan_rate']*100:.1f}%・{a['loan_term_years']}年。"
+        " DSCR・CF・回収年数はすべて税引前。"
+    )
+
+    # USALI内訳
+    with st.expander("📊 NOI内訳（USALI階層・mid）"):
+        nb = res["noi_breakdown_mid"]
+        st.table({
+            "項目": ["GPI（総収入）", "EGI（実効総収入）", "−変動費(OTA/清掃/リネン/水光熱変動)",
+                     "GOP前", "−固定費(人件費/委託/保険/固都税/水光熱基本)", "GOP",
+                     "−FF&E更新積立", "= NOI"],
+            "万円/年": [nb["gpi"], nb["egi"], nb["variable"], nb["gop_pre"],
+                       nb["fixed"], nb["gop"], nb["ffe"], nb["noi"]],
+        })
+
+    # 出口・IRR
+    st.markdown("#### 出口・トータルリターン（mid・税引前）")
+    ex = res["exit"]
+    e1, e2, e3 = st.columns(3)
+    with e1:
+        st.metric("売却純手取り（万円）", f"{ex['sale_net_man']:,.0f}",
+                  help=f"想定{ex['exit_year']}年後・売却{ex['sale_price_man']:,.0f}−残債{ex['loan_balance_man']:,.0f}")
+    with e2:
+        st.metric("簡易IRR", f"{ex['simple_irr']*100:.1f}%" if ex["simple_irr"] is not None else "—")
+    with e3:
+        st.metric("トータルリターン（万円）", f"{ex['total_return_man']:,.0f}")
+
+    # tornado
+    st.markdown("#### 感度（結論ドライバー）")
+    for t in res["tornado"]:
+        st.markdown(
+            f"**{t['driver']}** — {t['metric']}： "
+            f"{t['low_label']} `{t['low']:,.0f}` ／ 基準 `{t['base']:,.0f}` ／ {t['high_label']} `{t['high']:,.0f}`"
+        )
+
+    # 理論最大床（参考）
+    if res.get("theoretical_max_floor"):
+        th = res["theoretical_max_floor"]
+        with st.expander("🏗️ 容積ポテンシャル（参考値・要鑑定）"):
+            st.write(
+                f"現況容積消化率 **{th['current_consumption_pct']}%** ／ "
+                f"指定容積率 {th['designated_far_pct']}% ／ "
+                f"理論最大床 **{th['theoretical_max_floor_m2']:,.0f}㎡**"
+                + (f"（余地 約{th['headroom_x']}倍）" if th.get("headroom_x") else "")
+            )
+            st.caption(th["note"])
+    else:
+        st.caption("※ 容積ポテンシャル（理論最大床）は土地面積の入力で表示されます。")
+
+    st.info(res["disclaimer"])

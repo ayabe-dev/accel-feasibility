@@ -16,6 +16,8 @@ class BusinessType(str, Enum):
     """対象業態."""
 
     HOTEL_RYOKAN = "hotel_ryokan"  # 旅館・ホテル営業
+    SIMPLE_LODGING = "simple_lodging"  # 簡易宿所
+    MINPAKU = "minpaku"  # 住宅宿泊事業（民泊・年180日上限）
 
 
 class ProjectInput(BaseModel):
@@ -342,3 +344,5 @@ class FeasibilityReport(BaseModel):
     score_breakdown: Optional[dict] = None  # ScoreBreakdown をdict化して保持
     # 追加情報の影響解釈（Geminiで生成）
     context_impact: Optional["ContextImpact"] = None
+    # 収益性分析（前提明示型の試算。profitability.compute() の出力dictを保持）
+    profitability: Optional[dict] = None
