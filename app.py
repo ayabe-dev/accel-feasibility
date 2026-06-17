@@ -1014,10 +1014,6 @@ def _fire_label(code: str) -> str:
     return labels.get(code, code)
 
 
-if __name__ == "__main__":
-    main()
-
-
 # ---------------------------------------------------------------------------
 # 収益性タブ
 # ---------------------------------------------------------------------------
@@ -1172,3 +1168,8 @@ def render_profitability_tab(report) -> None:
         st.caption("※ 容積ポテンシャル（理論最大床）は土地面積の入力で表示されます。")
 
     st.info(res["disclaimer"])
+
+
+if __name__ == "__main__":
+    main()
+
