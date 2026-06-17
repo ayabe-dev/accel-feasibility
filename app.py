@@ -1121,7 +1121,12 @@ def render_monetization_tab(report) -> None:
     )
 
     with sub_sum:
-        v = res["valuation"]
+        v = res.get("valuation")
+        if not v:
+            st.info("価格判定（割安/割高）は再デプロイ後に表示されます。アプリを Reboot してください。")
+            v = {"market_value_man": {"min": 0, "mid": 0, "max": 0}, "asking_price_man": None,
+                 "income_value_mid_man": 0, "cost_value_man": None, "price_verdict": None,
+                 "gap_pct": None, "basis": ""}
         st.markdown("### ① この物件は割安か割高か（相場 vs 販売価格）")
         mv = v["market_value_man"]
         if v["asking_price_man"]:
@@ -1160,7 +1165,7 @@ def render_monetization_tab(report) -> None:
         st.caption(
             f"エリア:{res['area_tier']}／構造:{res['structure']}／業態:{res['business_type']}"
             f"／営業日:{res['operating_days_used']}日／客室:{res['rooms']}室"
-            f"／残存耐用:{res['remaining_useful_life_years']}年／RevPAR:{res['revpar_source']}／設定:{res['config_version']}"
+            f"／残存耐用:{res['remaining_useful_life_years']}年／RevPAR:{res.get('revpar_source','—')}／設定:{res['config_version']}"
         )
         with st.expander("📊 NOI内訳（USALI階層・mid）"):
             nb = res["noi_breakdown_mid"]
