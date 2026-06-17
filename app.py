@@ -1056,10 +1056,20 @@ def _profit_overrides() -> dict:
             loan_rate = st.slider("借入金利", 0.0, 0.08, 0.025, 0.005, key="prof_rate")
             loan_term = st.number_input("借入期間（年）", min_value=1, max_value=50, value=25, step=1, key="prof_term")
         exit_year = st.slider("出口（売却）想定年", 1, 30, 10, 1, key="prof_exit")
-        st.markdown("**Airbnb/民泊 相場（手動・任意）** — 近隣のAirbnb/民泊のADR・稼働率を入力すると収益試算に反映")
+        st.markdown("**課金モデル・収益目標**")
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1:
+            unit_label = st.radio("課金モデル", ["一棟貸し（建物まるごと）", "客室ごと"], key="prof_unit",
+                                  help="一棟貸し=ADRは建物1棟/泊。小型戸建て民泊向き。客室ごと=ADR×客室数")
+        with mc2:
+            target_yield = st.slider("目標NOI利回り（%）", 5, 25, 15, 1, key="prof_target",
+                                     help="この利回りを満たす適正価格を逆算します")
+        with mc3:
+            works_in = st.number_input("初期費用 リノベ＋消防許可（万円・空欄=自動）", min_value=0.0, value=0.0, step=100.0, key="prof_works")
+        st.markdown("**Airbnb/民泊 相場（手動・任意）** — 近隣のADR・稼働率を入れると反映（一棟貸しなら建物1棟の1泊単価）")
         ac1, ac2 = st.columns(2)
         with ac1:
-            adr = st.number_input("ADR 客室単価（円/泊）", min_value=0, value=0, step=1000, key="prof_adr")
+            adr = st.number_input("ADR（円/泊）", min_value=0, value=0, step=1000, key="prof_adr")
         with ac2:
             occ = st.slider("想定稼働率（%）", 0, 100, 0, 5, key="prof_occ")
     return {
@@ -1070,6 +1080,9 @@ def _profit_overrides() -> dict:
         "exit_year": int(exit_year),
         "adr_yen": (adr or None),
         "occupancy_input": (occ / 100.0) if occ else None,
+        "revenue_unit": "whole" if unit_label.startswith("一棟") else "per_room",
+        "target_noi_yield": target_yield / 100.0,
+        "initial_works_man": (works_in or None),
     }
 
 
@@ -1102,6 +1115,82 @@ def _render_cf_projection(proj, label):
     st.caption("NOIは横ばい前提（成長0%）。売却時純利益＝累計CF＋売却純手取り−自己資金。すべて税引前の試算。")
 
 
+def _render_backward(res, report) -> None:
+    """プロの5ステップ思考でNOI目標から適正価格を逆算して表示."""
+    b = res.get("backward")
+    st.markdown("## 🎯 適正価格の逆算（プロの5ステップ思考）")
+    st.caption("「目標NOI利回りを満たすには、いくらまでなら払っていいか」を逆算し、売出価格と比較します。前提は『前提を調整』で変更可。")
+    if not b:
+        st.info("逆算はアプリ更新の反映待ちです。Reboot後に表示されます。")
+        return
+
+    # STEP1 瞬殺フィルター（旅館業の可否：既存判定から）
+    st.markdown("### STEP1 ⏱️ 瞬殺フィルター（旅館業がそもそも可能か）")
+    lvl = getattr(report.overall_level, "value", str(report.overall_level))
+    zone = report.geo.zoning_name or "未取得"
+    by = report.input.built_year
+    kyu = (by is not None and by <= 1981)
+    f1, f2, f3 = st.columns(3)
+    f1.metric("旅館業 総合判定", {"GO": "🟢 可能", "CONDITIONAL": "🟡 条件付き", "NO_GO": "🔴 不可"}.get(lvl, lvl))
+    f2.metric("用途地域", zone)
+    f3.metric("旧耐震(1981以前)", "⚠️ 該当" if kyu else "OK")
+    if lvl == "NO_GO":
+        st.error("🔴 立地・法規でNGの可能性。『①旅館業が取れるか』タブで詳細を確認してください。割高以前にそもそも事業化できない恐れ。")
+    st.divider()
+
+    # STEP2 売上ポテンシャル
+    st.markdown("### STEP2 💰 売上ポテンシャル（定員→年間売上）")
+    s1, s2, s3 = st.columns(3)
+    s1.metric("最大定員の目安", f"{res['capacity_est']} 名", help="専有面積 ÷ 1人あたり面積")
+    s2.metric("課金モデル", "一棟貸し" if res["revenue_unit"] == "whole" else "客室ごと")
+    s3.metric("年間想定売上 GPI（mid）", f"{b['gpi_mid_man']:,.0f} 万円")
+    st.caption(f"RevPAR算定：{res['revpar_source']}。年間売上 ＝ RevPAR(=ADR×稼働) × {res['rooms_used_for_revenue']}室 × 営業日数。")
+    st.divider()
+
+    # STEP3 投資上限の逆算
+    st.markdown("### STEP3 🧮 投資上限の逆算（NOI ÷ 目標利回り）")
+    t1, t2, t3 = st.columns(3)
+    t1.metric("NOI（USALI・mid）", f"{b['noi_mid_man']:,.0f} 万円")
+    t2.metric("NOI（売上50%の簡易・参考）", f"{b['noi_quick50_mid_man']:,.0f} 万円")
+    t3.metric(f"総投資上限（目標{b['target_noi_yield']*100:.0f}%）", f"{b['budget_cap_man']['mid']:,.0f} 万円",
+              help=f"レンジ {b['budget_cap_man']['min']:,.0f}〜{b['budget_cap_man']['max']:,.0f} 万円")
+    st.caption("総投資上限 ＝ NOI ÷ 目標NOI利回り。これが事業に突っ込んでよい『お金の総額の上限』。")
+    st.divider()
+
+    # STEP4 初期費用の引き算 → 適正価格
+    st.markdown("### STEP4 ➖ 初期費用を引いて『物件に払っていい適正価格』")
+    w = b["initial_works_man"]
+    st.markdown(
+        f"総投資上限 **{b['budget_cap_man']['mid']:,.0f}万** － 初期費用(リノベ＋消防許可) **{w['mid']:,.0f}万** "
+        f"を取得諸経費{b['acq_cost_rate']*100:.0f}%で割り戻し → **適正価格 {b['fair_price_man']['mid']:,.0f}万円**"
+    )
+    st.caption(f"初期費用の根拠：{b['initial_works_source']}。適正価格 ＝ (総投資上限 − 初期費用) ÷ (1＋取得諸経費率)。")
+    fp = b["fair_price_man"]
+    st.metric("🏠 物件に払っていい適正価格（mid）", f"{fp['mid']:,.0f} 万円",
+              help=f"レンジ {fp['min']:,.0f}〜{fp['max']:,.0f} 万円")
+    st.divider()
+
+    # STEP5 最終ジャッジ
+    st.markdown("### STEP5 ⚖️ 最終ジャッジ（適正価格 vs 売出価格）")
+    if b["asking_price_man"]:
+        j1, j2, j3 = st.columns(3)
+        j1.metric("売出価格", f"{b['asking_price_man']:,.0f} 万円")
+        j2.metric("適正価格(mid)", f"{fp['mid']:,.0f} 万円")
+        j3.metric("判定", b["verdict"] or "—")
+        if b["suggested_discount_man"] and b["suggested_discount_man"] > 0:
+            st.warning(
+                f"💴 このままでは目標NOI{b['target_noi_yield']*100:.0f}%に届きません。"
+                f"**約{b['suggested_discount_man']:,.0f}万円の指値（{fp['mid']:,.0f}万円での買付）**が通れば検討余地あり。"
+            )
+        elif b["asking_price_man"] <= fp["min"]:
+            st.success("🟢 超割安！適正価格レンジの下限より安い水準です。")
+        else:
+            st.info("🟡 概ね妥当〜割安な水準です。")
+    else:
+        st.info("『前提を調整』で **販売価格** を入れると、指値要否まで判定します。")
+    st.caption("※ すべて前提明示型の試算。初期費用・ADR・目標利回りは前提次第で大きく動きます。")
+
+
 def render_monetization_tab(report) -> None:
     """②収益化できるか — 価値・複数年CF・感度."""
     st.markdown("## 💹 ②収益化できるか")
@@ -1116,9 +1205,11 @@ def render_monetization_tab(report) -> None:
     for w in res.get("warnings", []):
         st.warning(w)
 
-    sub_sum, sub5, sub10, sub_sens = st.tabs(
-        ["📌 価値・サマリ", "📅 5年キャッシュフロー", "📅 10年キャッシュフロー", "🎚️ 感度"]
+    sub_back, sub_sum, sub5, sub10, sub_sens = st.tabs(
+        ["🎯 適正価格(逆算)", "📌 価値・サマリ", "📅 5年CF", "📅 10年CF", "🎚️ 感度"]
     )
+    with sub_back:
+        _render_backward(res, report)
 
     with sub_sum:
         v = res.get("valuation")
@@ -1306,6 +1397,18 @@ def render_algorithm_page() -> None:
 ### 0.6 Airbnb（民泊）相場の扱い
 近隣Airbnb/民泊の **ADR・稼働率を手動入力** すると RevPAR=ADR×稼働 として収益試算に反映します。
 Airbnbには無料の公式相場APIがないため、自動取得は将来の有料API（AirDNA等）連携で対応予定（スクレイピングは行いません）。
+
+### 0.7 適正価格の逆算（プロの5ステップ思考）
+「目標NOI利回り（既定15%）を満たすには、いくらまで払っていいか」を逆算します。
+```
+STEP1 瞬殺フィルター：用途地域/旧耐震(1981以前)/接道で旅館業が可能か（不可なら即除外）
+STEP2 売上ポテンシャル：最大定員(=専有面積÷1人あたり面積) → ADR×稼働×営業日数 = 年間売上(GPI)
+STEP3 投資上限の逆算：NOI ÷ 目標NOI利回り = 総投資の上限
+STEP4 初期費用を引く：適正価格 = (総投資上限 − リノベ・消防許可費) ÷ (1＋取得諸経費率)
+STEP5 最終ジャッジ：適正価格 vs 売出価格 → 割安/妥当/割高（割高なら必要指値額を提示）
+```
+課金モデルは「一棟貸し（ADR=建物1棟/泊）」と「客室ごと（ADR×客室数）」を切替可能。
+NOIは精緻版（USALI）と簡易版（売上×50%）の両方を表示し、感覚値とも突き合わせられます。
 
 ### 1. 収益（USALI階層でNOIを作る）
 運営費を「率1本」で引かず、ホテル会計（USALI）の費目で積み上げます。

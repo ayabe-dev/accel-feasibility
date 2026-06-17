@@ -1,81 +1,174 @@
-# 収益性分析 デフォルト前提値（前提明示型の試算用）
-# 単位は項目ごとに明記。これは「相場の初期値」であり実勢を保証しない。社内調査ベースの参考値。
-version: "2026.06.1"
-as_of: "2026-06-01"
-
-# 定数
+version: 2026.06.1
+as_of: '2026-06-01'
 constants:
-  tsubo_m2: 3.30578          # 1坪=3.30578㎡
-  vacancy_allowance: 0.03    # GPI→EGI の空室・貸倒控除（稼働率と二重計上しない：貸倒のみ）
-  effective_room_ratio: 0.62 # 延床に対する客室占有率（宿泊用途。共用部控除後）。0.55-0.70の中央
-  default_room_area_m2: 18.0 # 1室面積デフォルト（㎡）
-
-# 構造別（建築坪単価＝再調達原価、解体坪単価、法定耐用年数）
+  tsubo_m2: 3.30578
+  vacancy_allowance: 0.03
+  effective_room_ratio: 0.62
+  default_room_area_m2: 18.0
+  capacity_m2_per_guest: 8.0
 structure:
-  RC:   {build_cost_per_tsubo_man: 200, demo_cost_per_tsubo_man: 8, useful_life_years: 47}
-  SRC:  {build_cost_per_tsubo_man: 230, demo_cost_per_tsubo_man: 10, useful_life_years: 47}
-  S:    {build_cost_per_tsubo_man: 150, demo_cost_per_tsubo_man: 6, useful_life_years: 34}
-  WOOD: {build_cost_per_tsubo_man: 90,  demo_cost_per_tsubo_man: 4, useful_life_years: 22}
-
-# エリアティア（住所キーワードで判定）。RevPAR=ADR×稼働の合成（円/室/日）。
+  RC:
+    build_cost_per_tsubo_man: 200
+    demo_cost_per_tsubo_man: 8
+    useful_life_years: 47
+  SRC:
+    build_cost_per_tsubo_man: 230
+    demo_cost_per_tsubo_man: 10
+    useful_life_years: 47
+  S:
+    build_cost_per_tsubo_man: 150
+    demo_cost_per_tsubo_man: 6
+    useful_life_years: 34
+  WOOD:
+    build_cost_per_tsubo_man: 90
+    demo_cost_per_tsubo_man: 4
+    useful_life_years: 22
 area_tiers:
   tokyo_central:
-    label: "東京都心（インバウンド強）"
-    keywords: ["新宿","渋谷","中央区","千代田","港区","台東","新大久保","大久保","銀座","浅草","上野"]
-    revpar_yen: {min: 9000, mid: 12000, max: 16000}
-    occupancy: {min: 0.65, mid: 0.75, max: 0.85}
-    cap_rate: {min: 0.040, mid: 0.050, max: 0.060}
-    land_price_per_tsubo_man: {min: 300, mid: 500, max: 800}
+    label: 東京都心（インバウンド強）
+    keywords:
+    - 新宿
+    - 渋谷
+    - 中央区
+    - 千代田
+    - 港区
+    - 台東
+    - 新大久保
+    - 大久保
+    - 銀座
+    - 浅草
+    - 上野
+    revpar_yen:
+      min: 9000
+      mid: 12000
+      max: 16000
+    occupancy:
+      min: 0.65
+      mid: 0.75
+      max: 0.85
+    cap_rate:
+      min: 0.04
+      mid: 0.05
+      max: 0.06
+    land_price_per_tsubo_man:
+      min: 300
+      mid: 500
+      max: 800
+    adr_per_guest_yen:
+      min: 2800
+      mid: 3800
+      max: 5000
   tokyo_23:
-    label: "東京23区その他"
-    keywords: ["区"]
-    revpar_yen: {min: 6000, mid: 8500, max: 11000}
-    occupancy: {min: 0.60, mid: 0.72, max: 0.82}
-    cap_rate: {min: 0.045, mid: 0.055, max: 0.065}
-    land_price_per_tsubo_man: {min: 180, mid: 300, max: 480}
+    label: 東京23区その他
+    keywords:
+    - 区
+    revpar_yen:
+      min: 6000
+      mid: 8500
+      max: 11000
+    occupancy:
+      min: 0.6
+      mid: 0.72
+      max: 0.82
+    cap_rate:
+      min: 0.045
+      mid: 0.055
+      max: 0.065
+    land_price_per_tsubo_man:
+      min: 180
+      mid: 300
+      max: 480
+    adr_per_guest_yen:
+      min: 2200
+      mid: 3000
+      max: 4000
   kyoto_tourist:
-    label: "京都・主要観光地"
-    keywords: ["京都","祇園","東山"]
-    revpar_yen: {min: 8000, mid: 11000, max: 15000}
-    occupancy: {min: 0.62, mid: 0.74, max: 0.84}
-    cap_rate: {min: 0.045, mid: 0.055, max: 0.065}
-    land_price_per_tsubo_man: {min: 150, mid: 280, max: 450}
+    label: 京都・主要観光地
+    keywords:
+    - 京都
+    - 祇園
+    - 東山
+    revpar_yen:
+      min: 8000
+      mid: 11000
+      max: 15000
+    occupancy:
+      min: 0.62
+      mid: 0.74
+      max: 0.84
+    cap_rate:
+      min: 0.045
+      mid: 0.055
+      max: 0.065
+    land_price_per_tsubo_man:
+      min: 150
+      mid: 280
+      max: 450
+    adr_per_guest_yen:
+      min: 3000
+      mid: 4000
+      max: 5500
   other:
-    label: "その他地域"
+    label: その他地域
     keywords: []
-    revpar_yen: {min: 5000, mid: 7000, max: 9500}
-    occupancy: {min: 0.55, mid: 0.65, max: 0.78}
-    cap_rate: {min: 0.055, mid: 0.070, max: 0.085}
-    land_price_per_tsubo_man: {min: 60, mid: 120, max: 220}
-
-# USALI 費目デフォルト（率は対EGI、額は年・万円）
+    revpar_yen:
+      min: 5000
+      mid: 7000
+      max: 9500
+    occupancy:
+      min: 0.55
+      mid: 0.65
+      max: 0.78
+    cap_rate:
+      min: 0.055
+      mid: 0.07
+      max: 0.085
+    land_price_per_tsubo_man:
+      min: 60
+      mid: 120
+      max: 220
+    adr_per_guest_yen:
+      min: 1800
+      mid: 2500
+      max: 3500
 usali:
-  ota_commission_rate: 0.15      # OTA手数料（対EGI）
-  cleaning_cost_per_stay_man: 0.05 # 清掃/泊（万円）= 500円/泊相当の概算
-  linen_rate: 0.03               # リネン（対EGI）
-  utility_variable_rate: 0.05    # 水光熱変動（対EGI）
-  mgmt_fee_rate: 0.05            # 運営委託料（対EGI）
-  labor_cost_per_room_man_year: 18 # 人件費（万円/室/年・固定の概算）
-  insurance_rate_of_revenue: 0.01  # 損害保険（対EGI）
-  property_tax_rate_of_value: 0.007 # 固都税（対 物件価格・年）概算
-  utility_base_per_room_man_year: 6 # 水光熱基本（万円/室/年）
-  ffe_reserve_rate: 0.04         # FF&E更新積立（対EGI）
-
-# 営業日上限（業態別）
+  ota_commission_rate: 0.15
+  cleaning_cost_per_stay_man: 0.05
+  linen_rate: 0.03
+  utility_variable_rate: 0.05
+  mgmt_fee_rate: 0.05
+  labor_cost_per_room_man_year: 18
+  insurance_rate_of_revenue: 0.01
+  property_tax_rate_of_value: 0.007
+  utility_base_per_room_man_year: 6
+  ffe_reserve_rate: 0.04
 operating_days_cap:
   hotel_ryokan: 365
   simple_lodging: 365
   minpaku: 180
-
-# 取得・金融デフォルト
 finance:
-  acquisition_cost_rate: 0.07   # 取得諸費用率
-  ltv: 0.70
-  loan_rate: 0.025              # 参考金利（要確認・各社変動）
+  acquisition_cost_rate: 0.07
+  ltv: 0.7
+  loan_rate: 0.025
   loan_term_years: 25
-  dev_misc_ratio: 0.15          # 開発諸経費率（参考の理論最大床計算用）
-
-# 季節係数（12ヶ月・平均1.0）暫定。出典TODO。
-seasonal_profile: [0.95, 0.90, 1.05, 1.05, 1.00, 0.95, 1.05, 1.10, 1.00, 1.05, 1.00, 0.90]
-# 立ち上げ期（開業からのramp、月次係数の上限到達まで）
+  dev_misc_ratio: 0.15
+seasonal_profile:
+- 0.95
+- 0.9
+- 1.05
+- 1.05
+- 1.0
+- 0.95
+- 1.05
+- 1.1
+- 1.0
+- 1.05
+- 1.0
+- 0.9
 rampup_months: 6
+works_defaults:
+  reno_per_tsubo_man: 45
+  fire_permit_fixed_man: 300
+  range_ratio: 0.35
+  target_noi_yield: 0.15
+default_revenue_unit: whole

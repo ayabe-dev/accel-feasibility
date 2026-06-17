@@ -319,26 +319,47 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     cost_value = (building_value + land_value_mid) if land_area else None
     assessed = building_value + land_value_mid  # 固都税ベース（土地未入力なら建物のみ）
 
-    rp = dict(tier["revpar_yen"])
-    oc = dict(tier["occupancy"])
     cr = tier["cap_rate"]
-    # Airbnb手動相場の反映（ADR×稼働 or RevPAR直接）
-    adr_in = o.get("adr_yen")
+    oc = dict(tier["occupancy"])
     occ_in = o.get("occupancy_input")
-    revpar_in = o.get("revpar_override")
-    revpar_source = "エリア相場(自動)"
-    if revpar_in or (adr_in and occ_in):
-        rev_mid = revpar_in or (adr_in * occ_in)
-        base_mid = rp["mid"] or rev_mid
-        ratio_min = (rp["min"] / base_mid) if base_mid else 0.8
-        ratio_max = (rp["max"] / base_mid) if base_mid else 1.25
-        rp = {"min": rev_mid * ratio_min, "mid": rev_mid, "max": rev_mid * ratio_max}
-        revpar_source = "Airbnb手動入力"
     if occ_in:
         oc = {"min": max(0.0, occ_in - 0.10), "mid": occ_in, "max": min(1.0, occ_in + 0.10)}
+
+    # 最大定員の目安（専有面積 ÷ 1人あたり面積）
+    cap_per_guest = _CFG["constants"].get("capacity_m2_per_guest", 8.0)
+    capacity_est = max(1, int(floor_area / cap_per_guest))
+
+    # 課金モデル：whole=一棟貸し（建物まるごとの1泊単価）／ per_room=客室ごと
+    revenue_unit = o.get("revenue_unit") or _CFG.get("default_revenue_unit", "whole")
+    adr_in = o.get("adr_yen")          # 手動ADR（whole=一棟/泊、per_room=1室/泊）
+    revpar_in = o.get("revpar_override")
+    rooms_used = 1 if revenue_unit == "whole" else max(1, rooms)
+
+    # ADR（min/mid/max）を決定 → RevPAR = ADR × 稼働
+    if revpar_in:
+        # RevPAR直接指定
+        rp = {"min": revpar_in * 0.85, "mid": revpar_in, "max": revpar_in * 1.15}
+        revpar_source = "RevPAR手動入力"
+    elif revenue_unit == "whole":
+        if adr_in:
+            adr_base = {"min": adr_in * 0.85, "mid": adr_in, "max": adr_in * 1.15}
+            revpar_source = "Airbnb手動入力(一棟ADR)"
+        else:
+            apg = tier["adr_per_guest_yen"]
+            adr_base = {k: capacity_est * apg[k] for k in ("min", "mid", "max")}
+            revpar_source = f"エリア相場(定員{capacity_est}名×1人単価)"
+        rp = {k: adr_base[k] * oc[k] for k in ("min", "mid", "max")}
+    else:  # per_room
+        if adr_in:
+            adr_base = {"min": adr_in * 0.85, "mid": adr_in, "max": adr_in * 1.15}
+            rp = {k: adr_base[k] * oc[k] for k in ("min", "mid", "max")}
+            revpar_source = "Airbnb手動入力(1室ADR)"
+        else:
+            rp = dict(tier["revpar_yen"])  # tierのRevPARは1室前提
+            revpar_source = "エリア相場(客室ごと)"
+
     cap_mid_override = o.get("cap_rate_mid")
     cap = {"min": cr["max"], "mid": cap_mid_override or cr["mid"], "max": cr["min"]}
-    # value: min=保守(低revpar/高cap), max=強気
     scen = {
         "min": dict(revpar=rp["min"], occ=oc["min"], cap=cr["max"]),
         "mid": dict(revpar=rp["mid"], occ=oc["mid"], cap=(cap_mid_override or cr["mid"])),
@@ -349,7 +370,7 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     noi = {}
     income_value = {}
     for k, s in scen.items():
-        nb = usali_noi(s["revpar"], s["occ"], rooms, days, assessed)
+        nb = usali_noi(s["revpar"], s["occ"], rooms_used, days, assessed)
         noi_breakdown[k] = nb
         noi[k] = nb["noi"]
         income_value[k] = inwood_value(nb["noi"], s["cap"], remaining)
@@ -479,6 +500,60 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
             valuation["asking_land_per_tsubo_man"] = round(asking / m2_to_tsubo(land_area), 1)
             valuation["tier_land_per_tsubo_man"] = land_tier
 
+    # ---- NOI目標から逆算：払っていい適正価格（プロの5ステップ思考） ----
+    target_yield = o.get("target_noi_yield", _CFG.get("works_defaults", {}).get("target_noi_yield", 0.15))
+    # 初期費用（旅館化リノベ＋消防設備＋用途変更/許可）＝面積スケール概算
+    wd = _CFG.get("works_defaults", {})
+    reno_per_tsubo = wd.get("reno_per_tsubo_man", 45)
+    fire_permit = wd.get("fire_permit_fixed_man", 300)
+    rr = wd.get("range_ratio", 0.35)
+    works_mid = reno_per_tsubo * m2_to_tsubo(floor_area) + fire_permit
+    works = {"min": works_mid * (1 - rr), "mid": works_mid, "max": works_mid * (1 + rr)}
+    works_src = f"面積スケール概算(リノベ{reno_per_tsubo}万/坪×{m2_to_tsubo(floor_area):.0f}坪＋消防許可{fire_permit}万)"
+    works_over = o.get("initial_works_man")
+    if works_over:
+        works = {"min": works_over, "mid": works_over, "max": works_over}
+        works_src = "手入力"
+    acq_rate2 = o.get("acquisition_cost_rate", fin["acquisition_cost_rate"])
+
+    def _budget_cap(noi_v):
+        return (noi_v / target_yield) if target_yield > 0 else 0.0
+
+    def _fair(noi_v, works_v):
+        cap = _budget_cap(noi_v)
+        # 適正物件価格 = (総投資上限 − 初期工事費) ÷ (1 + 取得諸経費率)
+        return max(0.0, (cap - works_v) / (1 + acq_rate2))
+
+    noi_r = {"min": noi["min"], "mid": noi["mid"], "max": noi["max"]}
+    fair = {
+        "min": _fair(noi_r["min"], works["max"]),   # 保守：低NOI×高工事
+        "mid": _fair(noi_r["mid"], works["mid"]),
+        "max": _fair(noi_r["max"], works["min"]),   # 強気：高NOI×低工事
+    }
+    asking2 = o.get("purchase_price_man")
+    back_verdict = None
+    discount = None
+    if asking2:
+        if asking2 <= fair["mid"]:
+            back_verdict = "割安（目標NOIを満たす）" if asking2 <= fair["min"] else "ほぼ適正（mid以下）"
+        else:
+            back_verdict = "割高（このままでは目標NOI未達）"
+            discount = round(asking2 - fair["mid"], 1)  # 必要な指値額（mid基準）
+    backward = {
+        "target_noi_yield": target_yield,
+        "gpi_mid_man": round(noi_breakdown["mid"]["gpi"], 1),
+        "noi_mid_man": round(noi["mid"], 1),
+        "noi_quick50_mid_man": round(noi_breakdown["mid"]["egi"] * 0.5, 1),
+        "budget_cap_man": {k: round(_budget_cap(noi_r[k]), 1) for k in ("min", "mid", "max")},
+        "initial_works_man": {k: round(works[k], 1) for k in ("min", "mid", "max")},
+        "initial_works_source": works_src,
+        "acq_cost_rate": acq_rate2,
+        "fair_price_man": {k: round(fair[k], 1) for k in ("min", "mid", "max")},
+        "asking_price_man": round(asking2, 1) if asking2 else None,
+        "verdict": back_verdict,
+        "suggested_discount_man": discount,
+    }
+
     # 複数年キャッシュフロー（5年・10年）
     noi_mid_val = noi_breakdown["mid"]["noi"]
     proj5 = cashflow_projection(noi_mid_val, ads, loan, loan_rate, term,
@@ -502,10 +577,14 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
         "area_tier": tier["label"],
         "revpar_source": revpar_source,
         "valuation": valuation,
+        "backward": backward,
         "structure": stru["_key"],
         "business_type": bt.value,
         "operating_days_used": days,
         "rooms": rooms,
+        "rooms_used_for_revenue": rooms_used,
+        "revenue_unit": revenue_unit,
+        "capacity_est": capacity_est,
         "room_area_m2": room_area,
         "floor_area_m2": floor_area,
         "remaining_useful_life_years": remaining,
