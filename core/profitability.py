@@ -319,9 +319,23 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     cost_value = (building_value + land_value_mid) if land_area else None
     assessed = building_value + land_value_mid  # 固都税ベース（土地未入力なら建物のみ）
 
-    rp = tier["revpar_yen"]
-    oc = tier["occupancy"]
+    rp = dict(tier["revpar_yen"])
+    oc = dict(tier["occupancy"])
     cr = tier["cap_rate"]
+    # Airbnb手動相場の反映（ADR×稼働 or RevPAR直接）
+    adr_in = o.get("adr_yen")
+    occ_in = o.get("occupancy_input")
+    revpar_in = o.get("revpar_override")
+    revpar_source = "エリア相場(自動)"
+    if revpar_in or (adr_in and occ_in):
+        rev_mid = revpar_in or (adr_in * occ_in)
+        base_mid = rp["mid"] or rev_mid
+        ratio_min = (rp["min"] / base_mid) if base_mid else 0.8
+        ratio_max = (rp["max"] / base_mid) if base_mid else 1.25
+        rp = {"min": rev_mid * ratio_min, "mid": rev_mid, "max": rev_mid * ratio_max}
+        revpar_source = "Airbnb手動入力"
+    if occ_in:
+        oc = {"min": max(0.0, occ_in - 0.10), "mid": occ_in, "max": min(1.0, occ_in + 0.10)}
     cap_mid_override = o.get("cap_rate_mid")
     cap = {"min": cr["max"], "mid": cap_mid_override or cr["mid"], "max": cr["min"]}
     # value: min=保守(低revpar/高cap), max=強気
@@ -433,6 +447,38 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
             "note": "参考値・要鑑定。斜線/日影/高度地区/天空率/前面道路制限・地階の扱いは未考慮。",
         }
 
+    # 相場（適正価格）vs 販売価格 の割安/割高判定（収益価格[A]と原価法[B]の両方を使用）
+    a_min, a_mid, a_max = income_value["min"], income_value["mid"], income_value["max"]
+    if cost_value is not None:
+        est_low = min(a_min, cost_value)
+        est_high = max(a_max, cost_value)
+        est_mid = (a_mid + cost_value) / 2.0
+    else:
+        est_low, est_mid, est_high = a_min, a_mid, a_max
+    asking = o.get("purchase_price_man")
+    valuation = {
+        "market_value_man": {"min": round(est_low, 1), "mid": round(est_mid, 1), "max": round(est_high, 1)},
+        "income_value_mid_man": round(a_mid, 1),
+        "cost_value_man": round(cost_value, 1) if cost_value is not None else None,
+        "asking_price_man": round(asking, 1) if asking else None,
+        "price_verdict": None,
+        "gap_pct": None,
+        "basis": "収益価格[A]と原価法[B]の両方（土地未入力時はAのみ）",
+    }
+    if asking:
+        gap = asking / est_mid - 1 if est_mid > 0 else None
+        if asking < est_low:
+            verdict = "割安（相場下限より安い）"
+        elif asking > est_high:
+            verdict = "割高（相場上限より高い）"
+        else:
+            verdict = "適正レンジ内"
+        valuation["price_verdict"] = verdict
+        valuation["gap_pct"] = round(gap * 100, 1) if gap is not None else None
+        if land_area:
+            valuation["asking_land_per_tsubo_man"] = round(asking / m2_to_tsubo(land_area), 1)
+            valuation["tier_land_per_tsubo_man"] = land_tier
+
     # 複数年キャッシュフロー（5年・10年）
     noi_mid_val = noi_breakdown["mid"]["noi"]
     proj5 = cashflow_projection(noi_mid_val, ads, loan, loan_rate, term,
@@ -454,6 +500,8 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
         "config_version": _CFG.get("version"),
         "as_of": _CFG.get("as_of"),
         "area_tier": tier["label"],
+        "revpar_source": revpar_source,
+        "valuation": valuation,
         "structure": stru["_key"],
         "business_type": bt.value,
         "operating_days_used": days,

@@ -1049,18 +1049,27 @@ def _profit_overrides() -> dict:
             land_area = st.number_input("土地面積（㎡）", min_value=0.0, value=0.0, step=10.0, key="prof_land_area")
             room_area = st.number_input("1室面積（㎡）", min_value=0.0, value=0.0, step=1.0, key="prof_room_area")
         with c2:
-            price = st.number_input("想定取得価格（万円・空欄=収益価格）", min_value=0.0, value=0.0, step=100.0, key="prof_price")
+            price = st.number_input("販売価格（売出・万円）", min_value=0.0, value=0.0, step=100.0, key="prof_price",
+                                    help="売出/取得想定価格。相場との割安・割高判定とCFに使用")
             ltv = st.slider("LTV（借入比率）", 0.0, 1.0, 0.70, 0.05, key="prof_ltv")
         with c3:
             loan_rate = st.slider("借入金利", 0.0, 0.08, 0.025, 0.005, key="prof_rate")
             loan_term = st.number_input("借入期間（年）", min_value=1, max_value=50, value=25, step=1, key="prof_term")
         exit_year = st.slider("出口（売却）想定年", 1, 30, 10, 1, key="prof_exit")
+        st.markdown("**Airbnb/民泊 相場（手動・任意）** — 近隣のAirbnb/民泊のADR・稼働率を入力すると収益試算に反映")
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            adr = st.number_input("ADR 客室単価（円/泊）", min_value=0, value=0, step=1000, key="prof_adr")
+        with ac2:
+            occ = st.slider("想定稼働率（%）", 0, 100, 0, 5, key="prof_occ")
     return {
         "land_area_m2": land_area or None,
         "room_area_m2": room_area or None,
         "purchase_price_man": price or None,
         "ltv": ltv, "loan_rate": loan_rate, "loan_term_years": int(loan_term),
         "exit_year": int(exit_year),
+        "adr_yen": (adr or None),
+        "occupancy_input": (occ / 100.0) if occ else None,
     }
 
 
@@ -1112,6 +1121,32 @@ def render_monetization_tab(report) -> None:
     )
 
     with sub_sum:
+        v = res["valuation"]
+        st.markdown("### ① この物件は割安か割高か（相場 vs 販売価格）")
+        mv = v["market_value_man"]
+        if v["asking_price_man"]:
+            vc = st.columns(3)
+            vc[0].metric("販売価格（売出）", f"{v['asking_price_man']:,.0f}万円")
+            vc[1].metric("想定適正価格(mid)", f"{mv['mid']:,.0f}万円",
+                         help=f"相場レンジ {mv['min']:,.0f}〜{mv['max']:,.0f}万円")
+            d = v["gap_pct"]
+            vc[2].metric("判定", v["price_verdict"],
+                         delta=(f"相場mid比 {d:+.1f}%" if d is not None else None), delta_color="inverse")
+            cost_txt = f"{v['cost_value_man']:,.0f}万円" if v["cost_value_man"] else "土地面積未入力"
+            st.caption(f"基準：{v['basis']}（収益価格[A] {v['income_value_mid_man']:,.0f}万円 ／ 原価法[B] {cost_txt}）")
+            if v.get("asking_land_per_tsubo_man"):
+                tl = v["tier_land_per_tsubo_man"]
+                st.caption(
+                    f"参考・土地坪単価：販売価格ベース {v['asking_land_per_tsubo_man']:,.0f}万円/坪 ↔ "
+                    f"エリア相場 {tl['min']}〜{tl['max']}万円/坪"
+                )
+        else:
+            st.info(
+                "「⚙️ 前提を調整」で **販売価格** を入力すると、相場との割安/割高を判定します。"
+                f"（現在の想定適正価格 mid {mv['mid']:,.0f}万円・レンジ {mv['min']:,.0f}〜{mv['max']:,.0f}万円）"
+            )
+        st.divider()
+        st.markdown("### ② 物件価値とNOIのサマリ")
         cols = st.columns(4)
         iv = res["income_value_man"]; noi = res["noi"]; cv = res["cost_value_man"]
         with cols[0]:
@@ -1125,7 +1160,7 @@ def render_monetization_tab(report) -> None:
         st.caption(
             f"エリア:{res['area_tier']}／構造:{res['structure']}／業態:{res['business_type']}"
             f"／営業日:{res['operating_days_used']}日／客室:{res['rooms']}室"
-            f"／残存耐用:{res['remaining_useful_life_years']}年／設定:{res['config_version']}"
+            f"／残存耐用:{res['remaining_useful_life_years']}年／RevPAR:{res['revpar_source']}／設定:{res['config_version']}"
         )
         with st.expander("📊 NOI内訳（USALI階層・mid）"):
             nb = res["noi_breakdown_mid"]
@@ -1252,6 +1287,20 @@ def render_algorithm_page() -> None:
 2. **儲かりやすいか（CFが回るか）？** … DSCR・返済比率・年間CF・複数年CF
 
 すべての主要出力は **弱気(min)／標準(mid)／強気(max)** のレンジで算出します。
+
+### 0.5 まず「相場 vs 販売価格」（割安/割高）
+収益価格[A]（NOI還元）と原価法[B]（土地値＋建物）の両方から **想定適正価格レンジ** を作り、
+入力した **販売価格（売出）** と比較して 割安／適正／割高 を判定します。
+```
+想定適正価格レンジ = [min(A.min, B), max(A.max, B)]   （土地未入力時はAのみ）
+販売価格 < レンジ下限 → 割安 ／ レンジ内 → 適正 ／ レンジ上限超 → 割高
+相場mid比(%) = 販売価格 ÷ 適正価格mid − 1
+```
+土地坪単価（販売価格ベース）とエリア相場の坪単価も並べて、土地としての割安感も確認できます。
+
+### 0.6 Airbnb（民泊）相場の扱い
+近隣Airbnb/民泊の **ADR・稼働率を手動入力** すると RevPAR=ADR×稼働 として収益試算に反映します。
+Airbnbには無料の公式相場APIがないため、自動取得は将来の有料API（AirDNA等）連携で対応予定（スクレイピングは行いません）。
 
 ### 1. 収益（USALI階層でNOIを作る）
 運営費を「率1本」で引かず、ホテル会計（USALI）の費目で積み上げます。
