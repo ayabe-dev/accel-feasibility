@@ -141,6 +141,87 @@ def inwood_value(noi_man: float, cap_rate: float, years: int) -> float:
     return noi_man * factor
 
 
+def cashflow_projection(noi_mid, ads, loan, loan_rate, term, exit_cap,
+                        price, equity, years, cg_rate, noi_growth=0.0):
+    """N年間の年次キャッシュフロー・累計CF・各年売却時の純利益を試算（税引前・mid）."""
+    rows = []
+    cumulative = 0.0
+    for t in range(1, years + 1):
+        noi_t = noi_mid * ((1 + noi_growth) ** (t - 1))
+        cf = noi_t - ads
+        cumulative += cf
+        bal = loan_balance(loan, loan_rate, term, t)
+        sale = (noi_t / exit_cap) if exit_cap and exit_cap > 0 else 0.0
+        gain = sale - price
+        sale_net = sale - bal - max(0.0, gain) * cg_rate
+        # その年に売却した場合の累計純利益（運営CF累計 + 売却純手取り − 自己資金）
+        net_if_sell = cumulative + sale_net - equity
+        rows.append({
+            "year": t,
+            "noi": round(noi_t, 1),
+            "annual_cf": round(cf, 1),
+            "cumulative_cf": round(cumulative, 1),
+            "loan_balance": round(bal, 1),
+            "sale_net": round(sale_net, 1),
+            "net_profit_if_sell": round(net_if_sell, 1),
+        })
+    return {
+        "years": years,
+        "rows": rows,
+        "cumulative_cf": round(cumulative, 1),
+        "net_profit_if_sell_end": rows[-1]["net_profit_if_sell"] if rows else 0.0,
+        "annual_cf": round(rows[0]["annual_cf"], 1) if rows else 0.0,
+    }
+
+
+def lender_candidates(stru_key, age, dscr_mid, noi_yield_mid, bt):
+    """物件プロファイルから候補金融機関タイプと通りやすさ目安を提示（一般論・要確認）."""
+    is_solid = stru_key in ("RC", "SRC")
+    young = age <= 25
+    high_dscr = (dscr_mid or 0) >= 1.3
+    def fit(cond_high, cond_mid):
+        return "通りやすい" if cond_high else ("可能性あり" if cond_mid else "やや厳しい")
+    cands = [
+        {
+            "type": "メガバンク・都市銀行",
+            "fit": fit(is_solid and young and high_dscr, is_solid and high_dscr),
+            "rate_hint": "低金利（参考1%前後〜）",
+            "term_hint": "残存耐用年数内",
+            "rationale": "低金利だが築年・構造・属性の審査が厳しい。RC築浅・高DSCR向き。",
+            "caveat": "属性（年収・自己資金・事業実績）依存が大きい。",
+        },
+        {
+            "type": "地方銀行・信用金庫",
+            "fit": fit(is_solid, True),
+            "rate_hint": "中（参考1〜3%）",
+            "term_hint": "耐用年数±",
+            "rationale": "エリア・関係性重視。収益物件に比較的対応。アパートローン等。",
+            "caveat": "エリア・取引実績で可否が変動。",
+        },
+        {
+            "type": "ノンバンク（オリックス銀行 等）",
+            "fit": "通りやすい",
+            "rate_hint": "中〜やや高（参考2〜4%）",
+            "term_hint": "築古でも年数が出やすい",
+            "rationale": "投資用に積極的・条件が柔軟。区分/一棟の収益物件向き。",
+            "caveat": "金利は都銀より高め。商品要項は時期で変動。",
+        },
+        {
+            "type": "ノンバンク（セゾンファンデックス 等）",
+            "fit": "通りやすい",
+            "rate_hint": "高め（参考3.65%前後〜・要確認）",
+            "term_hint": "築古・変則物件にも柔軟",
+            "rationale": "収益性（利回り）重視。築古・再生・バリューアップ前提に強い。高金利なら多くの物件で融資が付きやすい。",
+            "caveat": "金利が高いぶん、その金利でCFが回るか（DSCR・返済比率）を必ず確認。",
+        },
+    ]
+    # 高利回り・築古はノンバンク優位を補足
+    note = ("利回りが高い／築古でバリューアップ前提の物件は、属性重視の都銀より"
+            "収益性で見るノンバンク系が通りやすい傾向。"
+            "ただし金利・LTV・年数は各社・時期で変動するため、確定条件は最新の商品要項・個別審査で要確認。")
+    return {"candidates": cands, "note": note}
+
+
 # ---------------------------------------------------------------------------
 # USALI NOI（1シナリオ）
 # ---------------------------------------------------------------------------
@@ -352,6 +433,17 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
             "note": "参考値・要鑑定。斜線/日影/高度地区/天空率/前面道路制限・地階の扱いは未考慮。",
         }
 
+    # 複数年キャッシュフロー（5年・10年）
+    noi_mid_val = noi_breakdown["mid"]["noi"]
+    proj5 = cashflow_projection(noi_mid_val, ads, loan, loan_rate, term,
+                                scen["mid"]["cap"], price, equity, 5, cg_rate)
+    proj10 = cashflow_projection(noi_mid_val, ads, loan, loan_rate, term,
+                                 scen["mid"]["cap"], price, equity, 10, cg_rate)
+    # 銀行マッチング
+    age_for_bank = age
+    lenders = lender_candidates(stru["_key"], age_for_bank,
+                                financing["mid"]["dscr"], financing["mid"]["noi_yield"], bt)
+
     def rng(d):  # min<=mid<=max を保証
         vals = sorted([d["min"], d["mid"], d["max"]])
         return {"min": round(vals[0], 1), "mid": round(d["mid"], 1), "max": round(vals[2], 1)}
@@ -393,4 +485,6 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
         "tornado": tornado,
         "theoretical_max_floor": theoretical,
         "warnings": warnings,
+        "projection": {"5y": proj5, "10y": proj10},
+        "lenders": lenders,
     }
