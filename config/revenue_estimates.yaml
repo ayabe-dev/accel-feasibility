@@ -1,11 +1,17 @@
-version: 2026.06.1
-as_of: '2026-06-01'
+version: 2026.08.1
+as_of: '2026-08-18'
 constants:
   tsubo_m2: 3.30578
-  vacancy_allowance: 0.03
+  # vacancy_allowance は廃止（v2026.08.1）。稼働率で既に空室を織り込むため二重割引になっていた。
   effective_room_ratio: 0.62
   default_room_area_m2: 18.0
   capacity_m2_per_guest: 8.0
+  # 平均宿泊日数（泊）。清掃回数＝稼働室夜÷LOS の分母。1泊しか泊まらない前提だと清掃費が過大になる。
+  avg_length_of_stay_nights: 3.0
+  # 一棟貸しADRの定員逓減：ADR = 1人単価 × 定員^exponent（1.0=線形）。10人で線形は非現実的なため0.85を既定。
+  capacity_adr_exponent: 0.85
+  # 定員の上限（消防・旅館業の実務上の頭打ち）
+  capacity_max: 16
 structure:
   RC:
     build_cost_per_tsubo_man: 200
@@ -133,7 +139,20 @@ area_tiers:
       max: 3500
 usali:
   ota_commission_rate: 0.15
-  cleaning_cost_per_stay_man: 0.05
+  # 清掃の「原価」（1組あたり・万円）。後方互換用の既定値（客室1室相当）。
+  cleaning_cost_per_stay_man: 0.04
+  # 清掃料金の「収入」（ゲスト請求・1組あたり・万円）。
+  # 既定0＝「ADRに清掃費が含まれている」保守側の想定。別途請求するなら課金モデル別の値かUIで指定。
+  cleaning_fee_per_stay_man: 0.0
+  # 課金モデル別の清掃単価。旧実装は「1泊ごとに清掃」だったため単価が低く設定されていた。
+  # 組数ベースに是正したので、1組あたりの実勢単価に置き換える。
+  cleaning_by_unit:
+    whole:          # 一棟まるごと清掃（戸建て民泊等）
+      cost_per_stay_man: 0.12
+      fee_per_stay_man: 0.0
+    per_room:       # 客室1室あたり
+      cost_per_stay_man: 0.04
+      fee_per_stay_man: 0.0
   linen_rate: 0.03
   utility_variable_rate: 0.05
   mgmt_fee_rate: 0.05
@@ -152,6 +171,7 @@ finance:
   loan_rate: 0.025
   loan_term_years: 25
   dev_misc_ratio: 0.15
+# 月別の稼働係数（1月→12月）。年平均1.0になるよう正規化して使用する。
 seasonal_profile:
 - 0.95
 - 0.9
@@ -165,7 +185,11 @@ seasonal_profile:
 - 1.05
 - 1.0
 - 0.9
-rampup_months: 6
+# 開業立ち上がり：rampup_months かけて start_ratio → 1.0 へ線形回復。初年度CFに反映する。
+rampup:
+  enabled: true
+  months: 6
+  start_ratio: 0.4
 works_defaults:
   reno_per_tsubo_man: 45
   fire_permit_fixed_man: 300

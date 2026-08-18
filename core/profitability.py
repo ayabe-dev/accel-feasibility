@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from . import market_data
 from .models import BusinessType, FeasibilityReport
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "revenue_estimates.yaml"
@@ -142,16 +143,23 @@ def inwood_value(noi_man: float, cap_rate: float, years: int) -> float:
 
 
 def cashflow_projection(noi_mid, ads, loan, loan_rate, term, exit_cap,
-                        price, equity, years, cg_rate, noi_growth=0.0):
-    """N年間の年次キャッシュフロー・累計CF・各年売却時の純利益を試算（税引前・mid）."""
+                        price, equity, years, cg_rate, noi_growth=0.0,
+                        noi_year1=None):
+    """N年間の年次キャッシュフロー・累計CF・各年売却時の純利益を試算（税引前・mid）.
+
+    `noi_year1` を渡すと1年目だけ立ち上がり（ramp-up）後のNOIを使う。
+    売却価格の還元には常に安定稼働NOIを使う（初年度の立ち上がりで資産価値を
+    割り引くのは不適切なため）。
+    """
     rows = []
     cumulative = 0.0
     for t in range(1, years + 1):
-        noi_t = noi_mid * ((1 + noi_growth) ** (t - 1))
+        stabilized_t = noi_mid * ((1 + noi_growth) ** (t - 1))
+        noi_t = noi_year1 if (t == 1 and noi_year1 is not None) else stabilized_t
         cf = noi_t - ads
         cumulative += cf
         bal = loan_balance(loan, loan_rate, term, t)
-        sale = (noi_t / exit_cap) if exit_cap and exit_cap > 0 else 0.0
+        sale = (stabilized_t / exit_cap) if exit_cap and exit_cap > 0 else 0.0
         gain = sale - price
         sale_net = sale - bal - max(0.0, gain) * cg_rate
         # その年に売却した場合の累計純利益（運営CF累計 + 売却純手取り − 自己資金）
@@ -226,30 +234,59 @@ def lender_candidates(stru_key, age, dscr_mid, noi_yield_mid, bt):
 # USALI NOI（1シナリオ）
 # ---------------------------------------------------------------------------
 
-def usali_noi(revpar_yen: float, occupancy: float, rooms: int, days: int,
-              assessed_value_man: float) -> Dict[str, float]:
-    """USALI階層でNOIを算出（万円）."""
+def usali_noi(adr_yen: float, occupancy: float, rooms: int, days: float,
+              assessed_value_man: float, los: Optional[float] = None,
+              year_fraction: float = 1.0,
+              cleaning_cost_per_stay_man: Optional[float] = None,
+              cleaning_fee_per_stay_man: Optional[float] = None) -> Dict[str, float]:
+    """USALI階層でNOIを算出（万円）.
+
+    v2026.08.1 での是正点:
+      1. GPI の定義を「満室時の潜在収入（ADR×室数×営業日数）」に統一し、
+         EGI = GPI × 稼働率 とした。旧実装は GPI に RevPAR（＝ADR×稼働）を
+         使ったうえで空室率3%を重ねており、空室を二重に引いていた。
+      2. 清掃回数を「稼働室夜」ではなく「組数（稼働室夜÷平均宿泊日数）」にした。
+         旧実装は1泊ごとに清掃費が発生する計算で、LOS=3泊なら清掃費が約3倍。
+      3. ゲストに請求する清掃料金を収入として計上（旧実装は費用のみで収入なし）。
+      4. `year_fraction` で年額の固定費（人件費・基本光熱費・固都税）を按分し、
+         月次や部分期間の計算に使えるようにした。
+    """
     u = _CFG["usali"]
-    vac = _CFG["constants"]["vacancy_allowance"]
-    gpi_yen = revpar_yen * rooms * days
-    gpi = gpi_yen / 10000.0                      # 万円
-    egi = gpi * (1 - vac)
-    stays = rooms * days * _clamp(occupancy, 0, 1)
-    # 変動費
+    c = _CFG["constants"]
+    occ = _clamp(occupancy, 0.0, 1.0)
+    los_v = max(1.0, float(los if los else c.get("avg_length_of_stay_nights", 3.0)))
+    yf = max(0.0, float(year_fraction))
+    clean_cost = (u["cleaning_cost_per_stay_man"] if cleaning_cost_per_stay_man is None
+                  else float(cleaning_cost_per_stay_man))
+    clean_fee = (u.get("cleaning_fee_per_stay_man", 0.0) if cleaning_fee_per_stay_man is None
+                 else float(cleaning_fee_per_stay_man))
+
+    # --- 収入 ---
+    # GPI（満室時潜在収入）＝ ADR × 室数 × 営業日数
+    gpi = adr_yen * rooms * days / 10000.0
+    # 客室収入 ＝ GPI × 稼働率（＝ RevPAR × 室数 × 営業日数）
+    room_revenue = gpi * occ
+    occupied_room_nights = rooms * days * occ
+    stays = (occupied_room_nights / los_v) if los_v > 0 else 0.0
+    cleaning_revenue = clean_fee * stays
+    egi = room_revenue + cleaning_revenue
+
+    # --- 変動費 ---
     variable = (
-        egi * u["ota_commission_rate"]
-        + u["cleaning_cost_per_stay_man"] * stays
+        egi * u["ota_commission_rate"]                    # OTA手数料はゲスト支払総額に対して
+        + clean_cost * stays                              # 清掃原価は「組数」に対して
         + egi * u["linen_rate"]
         + egi * u["utility_variable_rate"]
     )
     gop_pre = egi - variable
-    # 固定費
+
+    # --- 固定費（年額項目は year_fraction で按分） ---
     fixed = (
-        u["labor_cost_per_room_man_year"] * rooms
+        u["labor_cost_per_room_man_year"] * rooms * yf
         + egi * u["mgmt_fee_rate"]
         + egi * u["insurance_rate_of_revenue"]
-        + assessed_value_man * u["property_tax_rate_of_value"]
-        + u["utility_base_per_room_man_year"] * rooms
+        + assessed_value_man * u["property_tax_rate_of_value"] * yf
+        + u["utility_base_per_room_man_year"] * rooms * yf
     )
     gop = gop_pre - fixed
     ffe = egi * u["ffe_reserve_rate"]
@@ -257,7 +294,79 @@ def usali_noi(revpar_yen: float, occupancy: float, rooms: int, days: int,
     return {
         "gpi": gpi, "egi": egi, "variable": variable, "gop_pre": gop_pre,
         "fixed": fixed, "gop": gop, "ffe": ffe, "noi": noi, "rooms": rooms,
+        # 内訳の可視化用
+        "adr_yen": adr_yen, "revpar_yen": adr_yen * occ, "occupancy": occ,
+        "room_revenue": room_revenue, "cleaning_revenue": cleaning_revenue,
+        "stays": stays, "occupied_room_nights": occupied_room_nights,
+        "avg_length_of_stay": los_v, "days": days,
+        "cleaning_cost_per_stay_man": clean_cost,
+        "cleaning_fee_per_stay_man": clean_fee,
     }
+
+
+# ---------------------------------------------------------------------------
+# 季節性・立ち上がり（月次）
+# ---------------------------------------------------------------------------
+
+_DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+_MONTH_LABELS = ["1月", "2月", "3月", "4月", "5月", "6月",
+                 "7月", "8月", "9月", "10月", "11月", "12月"]
+
+
+def seasonal_factors() -> List[float]:
+    """月別稼働係数を年平均1.0に正規化して返す."""
+    prof = _CFG.get("seasonal_profile") or []
+    if len(prof) != 12:
+        return [1.0] * 12
+    vals = [float(p) for p in prof]
+    mean = sum(vals) / 12.0
+    if mean <= 0:
+        return [1.0] * 12
+    return [v / mean for v in vals]
+
+
+def rampup_factors() -> List[float]:
+    """初年度の立ち上がり係数（12ヶ月）。start_ratio から 1.0 へ線形回復."""
+    r = _CFG.get("rampup") or {}
+    if not r.get("enabled", False):
+        return [1.0] * 12
+    months = int(_clamp(float(r.get("months", 6)), 1, 12))
+    start = _clamp(float(r.get("start_ratio", 0.4)), 0.0, 1.0)
+    out: List[float] = []
+    for i in range(12):
+        if i >= months:
+            out.append(1.0)
+        else:
+            out.append(start + (1.0 - start) * (i / months))
+    return out
+
+
+def monthly_profile(adr_yen: float, occupancy: float, rooms: int, days_year: float,
+                    assessed_value_man: float, los: Optional[float] = None,
+                    ramp: Optional[List[float]] = None,
+                    cleaning_cost_per_stay_man: Optional[float] = None,
+                    cleaning_fee_per_stay_man: Optional[float] = None) -> List[Dict[str, float]]:
+    """月次の稼働・売上・NOIを算出（季節性・任意で立ち上がりを反映）."""
+    facs = seasonal_factors()
+    total_days = float(sum(_DAYS_IN_MONTH))
+    rows: List[Dict[str, float]] = []
+    for i in range(12):
+        frac = _DAYS_IN_MONTH[i] / total_days
+        days_m = days_year * frac
+        occ_m = _clamp(occupancy * facs[i] * (ramp[i] if ramp else 1.0), 0.0, 1.0)
+        nb = usali_noi(adr_yen, occ_m, rooms, days_m, assessed_value_man,
+                       los=los, year_fraction=frac,
+                       cleaning_cost_per_stay_man=cleaning_cost_per_stay_man,
+                       cleaning_fee_per_stay_man=cleaning_fee_per_stay_man)
+        rows.append({
+            "month": _MONTH_LABELS[i],
+            "seasonal_factor": round(facs[i], 3),
+            "ramp_factor": round(ramp[i], 3) if ramp else 1.0,
+            "occupancy": round(occ_m, 4),
+            "revenue": round(nb["egi"], 1),
+            "noi": round(nb["noi"], 1),
+        })
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -325,55 +434,109 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     if occ_in:
         oc = {"min": max(0.0, occ_in - 0.10), "mid": occ_in, "max": min(1.0, occ_in + 0.10)}
 
-    # 最大定員の目安（専有面積 ÷ 1人あたり面積）
+    # 最大定員の目安（専有面積 ÷ 1人あたり面積）。実務上の上限でクランプする。
     cap_per_guest = _CFG["constants"].get("capacity_m2_per_guest", 8.0)
-    capacity_est = max(1, int(floor_area / cap_per_guest))
+    cap_max = int(_CFG["constants"].get("capacity_max", 16))
+    capacity_raw = max(1, int(floor_area / cap_per_guest))
+    capacity_est = min(capacity_raw, cap_max)
+    if capacity_raw > cap_max:
+        warnings.append(
+            f"面積からの定員目安{capacity_raw}名を実務上限{cap_max}名にクランプしました"
+            "（消防・旅館業の実務上、面積に比例して定員を増やし続けることはできません）。"
+        )
 
     # 課金モデル：whole=一棟貸し（建物まるごとの1泊単価）／ per_room=客室ごと
     revenue_unit = o.get("revenue_unit") or _CFG.get("default_revenue_unit", "whole")
     adr_in = o.get("adr_yen")          # 手動ADR（whole=一棟/泊、per_room=1室/泊）
     revpar_in = o.get("revpar_override")
     rooms_used = 1 if revenue_unit == "whole" else max(1, rooms)
+    los = o.get("avg_length_of_stay") or _CFG["constants"].get("avg_length_of_stay_nights", 3.0)
+
+    # 清掃単価（1組あたり）：課金モデル別の既定 → overridesで上書き可
+    _cbu = (_CFG["usali"].get("cleaning_by_unit") or {}).get(revenue_unit, {})
+    clean_cost_man = o.get("cleaning_cost_man")
+    if clean_cost_man is None:
+        clean_cost_man = _cbu.get("cost_per_stay_man", _CFG["usali"]["cleaning_cost_per_stay_man"])
+    clean_fee_man = o.get("cleaning_fee_man")
+    if clean_fee_man is None:
+        clean_fee_man = _cbu.get("fee_per_stay_man", _CFG["usali"].get("cleaning_fee_per_stay_man", 0.0))
+
+    # 近隣コンプ（手入力）→ 相場サマリ。将来はここをAirDNA等のアダプタに差し替える。
+    comps_summary = market_data.summarize_comps(o.get("comps"))
+    if comps_summary and comps_summary.get("occupancy") and not occ_in:
+        co = comps_summary["occupancy"]
+        oc = {k: _clamp(co[k], 0.0, 1.0) for k in ("min", "mid", "max")}
+
+    # 一棟貸しADRの定員逓減指数（1.0＝定員に線形。既定0.85＝逓減）
+    cap_exp = float(_CFG["constants"].get("capacity_adr_exponent", 0.85))
+
+    def _tier_adr():
+        """エリア相場からADRレンジ（min/mid/max）と出典ラベルを作る."""
+        if revenue_unit == "whole":
+            apg = tier["adr_per_guest_yen"]
+            scale = capacity_est ** cap_exp
+            return ({k: apg[k] * scale for k in ("min", "mid", "max")},
+                    f"エリア相場（1人単価 × 定員{capacity_est}名^{cap_exp}＝逓減考慮）")
+        # per_room：tierのRevPARは1室前提なので、稼働で割り戻してADRにする
+        rpv = tier["revpar_yen"]
+        return ({k: (rpv[k] / oc[k] if oc[k] > 0 else rpv[k]) for k in ("min", "mid", "max")},
+                "エリア相場（客室ごと・RevPAR ÷ 稼働率）")
 
     # ADR（min/mid/max）を決定 → RevPAR = ADR × 稼働
+    # 優先順位：RevPAR直接指定 ＞ 手動ADR ＞ 近隣コンプ ＞ エリア相場
     if revpar_in:
-        # RevPAR直接指定
         rp = {"min": revpar_in * 0.85, "mid": revpar_in, "max": revpar_in * 1.15}
+        adr_base = {k: (rp[k] / oc[k] if oc[k] > 0 else rp[k]) for k in ("min", "mid", "max")}
         revpar_source = "RevPAR手動入力"
-    elif revenue_unit == "whole":
-        if adr_in:
-            adr_base = {"min": adr_in * 0.85, "mid": adr_in, "max": adr_in * 1.15}
-            revpar_source = "Airbnb手動入力(一棟ADR)"
-        else:
-            apg = tier["adr_per_guest_yen"]
-            adr_base = {k: capacity_est * apg[k] for k in ("min", "mid", "max")}
-            revpar_source = f"エリア相場(定員{capacity_est}名×1人単価)"
+    elif adr_in:
+        adr_base = {"min": adr_in * 0.85, "mid": adr_in, "max": adr_in * 1.15}
+        _ul = "一棟ADR" if revenue_unit == "whole" else "1室ADR"
+        revpar_source = f"手動入力（{_ul}・±15%をレンジとして仮置き）"
         rp = {k: adr_base[k] * oc[k] for k in ("min", "mid", "max")}
-    else:  # per_room
-        if adr_in:
-            adr_base = {"min": adr_in * 0.85, "mid": adr_in, "max": adr_in * 1.15}
-            rp = {k: adr_base[k] * oc[k] for k in ("min", "mid", "max")}
-            revpar_source = "Airbnb手動入力(1室ADR)"
-        else:
-            rp = dict(tier["revpar_yen"])  # tierのRevPARは1室前提
-            revpar_source = "エリア相場(客室ごと)"
+    elif comps_summary and comps_summary.get("adr_yen"):
+        ca = comps_summary["adr_yen"]
+        adr_base = {k: ca[k] for k in ("min", "mid", "max")}
+        revpar_source = f"近隣コンプ{comps_summary['comp_count']}件（中央値=mid・四分位=レンジ）"
+        rp = {k: adr_base[k] * oc[k] for k in ("min", "mid", "max")}
+    else:
+        adr_base, revpar_source = _tier_adr()
+        rp = {k: adr_base[k] * oc[k] for k in ("min", "mid", "max")}
 
     cap_mid_override = o.get("cap_rate_mid")
     cap = {"min": cr["max"], "mid": cap_mid_override or cr["mid"], "max": cr["min"]}
     scen = {
-        "min": dict(revpar=rp["min"], occ=oc["min"], cap=cr["max"]),
-        "mid": dict(revpar=rp["mid"], occ=oc["mid"], cap=(cap_mid_override or cr["mid"])),
-        "max": dict(revpar=rp["max"], occ=oc["max"], cap=cr["min"]),
+        "min": dict(adr=adr_base["min"], revpar=rp["min"], occ=oc["min"], cap=cr["max"]),
+        "mid": dict(adr=adr_base["mid"], revpar=rp["mid"], occ=oc["mid"], cap=(cap_mid_override or cr["mid"])),
+        "max": dict(adr=adr_base["max"], revpar=rp["max"], occ=oc["max"], cap=cr["min"]),
     }
 
     noi_breakdown = {}
     noi = {}
     income_value = {}
     for k, s in scen.items():
-        nb = usali_noi(s["revpar"], s["occ"], rooms_used, days, assessed)
+        nb = usali_noi(s["adr"], s["occ"], rooms_used, days, assessed, los=los,
+                       cleaning_cost_per_stay_man=clean_cost_man,
+                       cleaning_fee_per_stay_man=clean_fee_man)
         noi_breakdown[k] = nb
         noi[k] = nb["noi"]
         income_value[k] = inwood_value(nb["noi"], s["cap"], remaining)
+
+    # 月次（季節性）と初年度（立ち上がり）— midシナリオで算出
+    _ramp = rampup_factors()
+    _clean_kw = dict(cleaning_cost_per_stay_man=clean_cost_man,
+                     cleaning_fee_per_stay_man=clean_fee_man)
+    monthly_stable = monthly_profile(scen["mid"]["adr"], scen["mid"]["occ"], rooms_used,
+                                     days, assessed, los=los, **_clean_kw)
+    monthly_year1 = monthly_profile(scen["mid"]["adr"], scen["mid"]["occ"], rooms_used,
+                                    days, assessed, los=los, ramp=_ramp, **_clean_kw)
+    noi_year1 = sum(r["noi"] for r in monthly_year1)
+    if any(f < 1.0 for f in _ramp):
+        _rc = _CFG.get("rampup", {})
+        warnings.append(
+            f"初年度は開業立ち上がりを反映しています（{_rc.get('months', 6)}ヶ月かけて"
+            f"稼働{_rc.get('start_ratio', 0.4) * 100:.0f}%→100%へ回復）。"
+            f"初年度NOI {noi_year1:,.0f}万円 ／ 安定稼働NOI {noi['mid']:,.0f}万円。"
+        )
 
     # 想定取得価格：override or 収益価格(mid)
     fin = _CFG["finance"]
@@ -426,7 +589,12 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     bal = loan_balance(loan, loan_rate, term, exit_year)
     gain = sale_price - price
     sale_net = sale_price - bal - max(0.0, gain) * cg_rate
-    cfs = [-equity] + [cf_mid] * (exit_year - 1) + [cf_mid + sale_net]
+    # 1年目は開業立ち上がり後のCFを使う（複数年CF表と整合させる）
+    cf_year1 = noi_year1 - ads
+    if exit_year <= 1:
+        cfs = [-equity, cf_year1 + sale_net]
+    else:
+        cfs = [-equity, cf_year1] + [cf_mid] * (exit_year - 2) + [cf_mid + sale_net]
     irr = irr_bisection(cfs)
     total_return = sum(cfs)
 
@@ -557,9 +725,11 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     # 複数年キャッシュフロー（5年・10年）
     noi_mid_val = noi_breakdown["mid"]["noi"]
     proj5 = cashflow_projection(noi_mid_val, ads, loan, loan_rate, term,
-                                scen["mid"]["cap"], price, equity, 5, cg_rate)
+                                scen["mid"]["cap"], price, equity, 5, cg_rate,
+                                noi_year1=noi_year1)
     proj10 = cashflow_projection(noi_mid_val, ads, loan, loan_rate, term,
-                                 scen["mid"]["cap"], price, equity, 10, cg_rate)
+                                 scen["mid"]["cap"], price, equity, 10, cg_rate,
+                                 noi_year1=noi_year1)
     # 銀行マッチング
     age_for_bank = age
     lenders = lender_candidates(stru["_key"], age_for_bank,
@@ -588,7 +758,17 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
         "room_area_m2": room_area,
         "floor_area_m2": floor_area,
         "remaining_useful_life_years": remaining,
+        "adr_yen": {k: round(adr_base[k], 0) for k in ("min", "mid", "max")},
+        "avg_length_of_stay": los,
+        "market_comps": comps_summary,
+        "noi_year1_man": round(noi_year1, 1),
+        "monthly": {"stabilized": monthly_stable, "year1": monthly_year1},
         "assumptions": {
+            "adr_yen": {k: round(adr_base[k], 0) for k in ("min", "mid", "max")},
+            "avg_length_of_stay": los,
+            "capacity_adr_exponent": cap_exp,
+            "cleaning_cost_per_stay_man": clean_cost_man,
+            "cleaning_fee_per_stay_man": clean_fee_man,
             "revpar_yen": rp, "occupancy": oc, "cap_rate": cap,
             "price_assumption_man": round(price, 1),
             "price_is_override": bool(o.get("purchase_price_man")),
