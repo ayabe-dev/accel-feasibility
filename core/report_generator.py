@@ -70,8 +70,13 @@ PATTERN_LABEL = {
 def generate_markdown_report(
     report: FeasibilityReport,
     weights: Optional[Dict[str, float]] = None,
+    chat_logs: Optional[Dict[str, List[Dict[str, str]]]] = None,
 ) -> str:
-    """詳細Markdownレポートを生成."""
+    """詳細Markdownレポートを生成.
+
+    `report.profitability` があれば収益性セクションを、
+    `chat_logs` があれば議論ログを末尾に付す。
+    """
     sections: List[str] = []
 
     sections.append(_section_header(report))
@@ -84,11 +89,18 @@ def generate_markdown_report(
     sections.append(_section_fire_safety(report))
     sections.append(_section_lodging_business(report))
     sections.append(_section_cost_timeline(report))
+    sections.append(_section_profitability(report))
     sections.append(_section_score_detail(report, weights))
     sections.append(_section_todos(report))
     sections.append(_section_missing_documents(report))
     sections.append(_section_extracted_documents(report))
     sections.append(_section_appendix(report))
+    if chat_logs:
+        try:
+            from .chat import transcript_markdown
+            sections.append(transcript_markdown(chat_logs))
+        except Exception:  # noqa: BLE001
+            pass
 
     return "\n\n".join(s for s in sections if s)
 
@@ -480,17 +492,208 @@ def _section_cost_timeline(report: FeasibilityReport) -> str:
     return "\n".join(lines)
 
 
+def _fmt_range(d, unit: str = "万円", fmt: str = ",.0f") -> str:
+    """min/mid/max dict を『mid（min〜max）』表記に."""
+    if not isinstance(d, dict):
+        return "—"
+    try:
+        return (f"{d['mid']:{fmt}} {unit}"
+                f"（{d['min']:{fmt}} 〜 {d['max']:{fmt}}）")
+    except (KeyError, TypeError, ValueError):
+        return "—"
+
+
+def _section_profitability(report: FeasibilityReport) -> str:
+    """収益性・物件価値セクション（profitability.compute の出力から生成）."""
+    p = getattr(report, "profitability", None)
+    if not p:
+        return ""
+
+    a = p.get("assumptions") or {}
+    nb = p.get("noi_breakdown_mid") or {}
+    lines = ["## 10. 収益性・物件価値（前提明示型の試算）\n"]
+    lines.append(
+        "> ⚠️ 本セクションは前提明示型の試算（estimate）であり、"
+        "**鑑定評価・融資審査の代替ではありません**。数値はレンジで確認してください。\n"
+    )
+
+    # 10-1 前提
+    lines.append("### 10-1. 収益の前提\n")
+    lines.append("| 項目 | 値 | 出典・根拠 |")
+    lines.append("|---|---|---|")
+    adr = p.get("adr_yen") or {}
+    occ = a.get("occupancy") or {}
+    lines.append(f"| ADR（1泊単価） | {_fmt_range(adr, '円')} | {p.get('revpar_source', '—')} |")
+    if occ:
+        lines.append(
+            f"| 稼働率 | {occ.get('mid', 0) * 100:.1f}%"
+            f"（{occ.get('min', 0) * 100:.0f}〜{occ.get('max', 0) * 100:.0f}%） | 同上 |"
+        )
+    lines.append(f"| 課金モデル | {'一棟貸し' if p.get('revenue_unit') == 'whole' else '客室ごと'} | — |")
+    lines.append(f"| 収益計算室数 | {p.get('rooms_used_for_revenue', '—')} 室 | 客室数 {p.get('rooms', '—')} 室 |")
+    lines.append(f"| 最大定員の目安 | {p.get('capacity_est', '—')} 名 | 専有面積 ÷ 1人あたり面積（上限クランプ） |")
+    lines.append(f"| 営業日数 | {p.get('operating_days_used', '—')} 日 | 民泊は年180日上限 |")
+    lines.append(f"| 平均宿泊日数(LOS) | {p.get('avg_length_of_stay', '—')} 泊 | 清掃回数の分母 |")
+    lines.append(f"| エリア区分 | {p.get('area_tier', '—')} | 住所キーワード判定 |")
+    lines.append(f"| 残存耐用年数 | {p.get('remaining_useful_life_years', '—')} 年 | 構造別法定耐用年数 − 築年数 |")
+    lines.append(f"| 設定バージョン | {p.get('config_version', '—')}（{p.get('as_of', '—')} 時点） | — |")
+
+    mc = p.get("market_comps")
+    if mc:
+        lines.append(f"\n**近隣コンプ**：{mc.get('comp_count', 0)}件を採用。{mc.get('note', '')}\n")
+
+    # 10-2 NOI
+    lines.append("\n### 10-2. NOI（USALI階層・標準シナリオ）\n")
+    lines.append("| 段階 | 万円/年 | 内容 |")
+    lines.append("|---|---:|---|")
+    lines.append(f"| GPI（満室潜在収入） | {nb.get('gpi', 0):,.0f} | ADR × 室数 × 営業日数 |")
+    lines.append(f"| 客室収入 | {nb.get('room_revenue', 0):,.0f} | GPI × 稼働率 |")
+    lines.append(f"| 清掃料金収入 | {nb.get('cleaning_revenue', 0):,.0f} | 1組あたり請求額 × 組数 |")
+    lines.append(f"| **EGI（実効総収入）** | **{nb.get('egi', 0):,.0f}** | 客室収入 ＋ 清掃料金収入 |")
+    lines.append(f"| − 変動費 | {-abs(nb.get('variable', 0)):,.0f} | OTA手数料・清掃原価・リネン・変動光熱 |")
+    lines.append(f"| − 固定費 | {-abs(nb.get('fixed', 0)):,.0f} | 人件費・管理料・保険・固都税・基本光熱 |")
+    lines.append(f"| − FF&E積立 | {-abs(nb.get('ffe', 0)):,.0f} | 備品更新積立 |")
+    lines.append(f"| **= NOI（安定稼働）** | **{nb.get('noi', 0):,.0f}** | — |")
+    lines.append(f"| NOI（初年度） | {p.get('noi_year1_man', 0):,.0f} | 季節性＋開業立ち上がりを月次反映 |")
+    lines.append(f"\nNOIレンジ：{_fmt_range(p.get('noi'))}\n")
+    lines.append(
+        f"清掃前提：原価 {a.get('cleaning_cost_per_stay_man', 0) * 10000:,.0f}円/組、"
+        f"ゲスト請求 {a.get('cleaning_fee_per_stay_man', 0) * 10000:,.0f}円/組。"
+        f"清掃は1泊ごとではなく**1組ごと**（稼働室夜 ÷ LOS）で計上しています。\n"
+    )
+
+    # 10-3 物件価値
+    lines.append("\n### 10-3. 物件価値と割安・割高\n")
+    v = p.get("valuation") or {}
+    mv = v.get("market_value_man") or {}
+    lines.append(f"- **収益価格[A]**（Inwood有期還元）：{_fmt_range(p.get('income_value_man'))}")
+    cv = p.get("cost_value_man")
+    lines.append(f"- **原価法[B]**：{f'{cv:,.0f} 万円' if cv is not None else '土地面積未入力のため算出なし'}")
+    if mv:
+        lines.append(f"- **想定適正価格レンジ**：{_fmt_range(mv)}")
+    if v.get("asking_price_man"):
+        gap = v.get("gap_pct")
+        lines.append(
+            f"- **売出価格**：{v['asking_price_man']:,.0f} 万円 → **判定：{v.get('price_verdict', '—')}**"
+            + (f"（相場mid比 {gap:+.1f}%）" if gap is not None else "")
+        )
+    if v.get("basis"):
+        lines.append(f"- 判定基準：{v['basis']}")
+
+    # 10-4 適正価格の逆算
+    b = p.get("backward")
+    if b:
+        lines.append("\n### 10-4. 適正価格の逆算（目標NOIから）\n")
+        lines.append(f"- 目標NOI利回り：**{b.get('target_noi_yield', 0) * 100:.0f}%**")
+        lines.append(f"- 総投資上限：{_fmt_range(b.get('budget_cap_man'))}")
+        lines.append(
+            f"- 初期費用（リノベ＋消防許可）：{_fmt_range(b.get('initial_works_man'))}"
+            f"／根拠：{b.get('initial_works_source', '—')}"
+        )
+        lines.append(f"- **物件に払っていい適正価格**：{_fmt_range(b.get('fair_price_man'))}")
+        if b.get("verdict"):
+            lines.append(f"- **判定：{b['verdict']}**")
+        if b.get("suggested_discount_man"):
+            lines.append(
+                f"- 必要な指値額の目安：**約 {b['suggested_discount_man']:,.0f} 万円**"
+            )
+
+    # 10-5 資金計画・CF
+    lines.append("\n### 10-5. 資金計画とキャッシュフロー（税引前）\n")
+    lines.append(
+        f"想定取得価格 {a.get('price_assumption_man', 0):,.0f}万円"
+        f"（{'手入力' if a.get('price_is_override') else '収益価格midを仮定'}）／"
+        f"借入 {a.get('loan_man', 0):,.0f}万円（LTV {a.get('ltv', 0) * 100:.0f}%）／"
+        f"自己資金 {a.get('equity_man', 0):,.0f}万円／"
+        f"金利 {a.get('loan_rate', 0) * 100:.1f}%・期間 {a.get('loan_term_years', '—')}年\n"
+    )
+    fin = p.get("financing") or {}
+    lines.append("| シナリオ | DSCR | 返済比率(対EGI) | 年間CF(万円) | 表面利回り | NOI利回り |")
+    lines.append("|---|---:|---:|---:|---:|---:|")
+    for key, lab in (("min", "弱気"), ("mid", "標準"), ("max", "強気")):
+        f = fin.get(key) or {}
+
+        def _n(v, mult=1.0, fmt=".2f", suf=""):
+            return f"{v * mult:{fmt}}{suf}" if isinstance(v, (int, float)) else "—"
+
+        lines.append(
+            f"| {lab} | {_n(f.get('dscr'))} | {_n(f.get('repayment_ratio'), 100, '.1f', '%')} "
+            f"| {_n(f.get('pretax_cf'), 1, ',.0f')} | {_n(f.get('gross_yield'), 100, '.1f', '%')} "
+            f"| {_n(f.get('noi_yield'), 100, '.1f', '%')} |"
+        )
+    lines.append(f"\n**儲かりやすさ判定（標準）：{p.get('verdict', '—')}**\n")
+
+    proj = (p.get("projection") or {}).get("10y")
+    if proj and proj.get("rows"):
+        lines.append("\n#### 10年キャッシュフロー（標準シナリオ）\n")
+        lines.append("| 年 | NOI | 年間CF | 累計CF | ローン残債 | その年に売却した場合の純利益 |")
+        lines.append("|---:|---:|---:|---:|---:|---:|")
+        for r in proj["rows"]:
+            lines.append(
+                f"| {r['year']} | {r['noi']:,.0f} | {r['annual_cf']:,.0f} | {r['cumulative_cf']:,.0f} "
+                f"| {r['loan_balance']:,.0f} | {r['net_profit_if_sell']:,.0f} |"
+            )
+        lines.append("\n単位：万円・税引前。1年目は開業立ち上がりを反映。\n")
+
+    ex = p.get("exit") or {}
+    if ex:
+        irr = ex.get("simple_irr")
+        lines.append(
+            f"\n**出口（{ex.get('exit_year', '—')}年後）**："
+            f"売却 {ex.get('sale_price_man', 0):,.0f}万円 − 残債 {ex.get('loan_balance_man', 0):,.0f}万円 "
+            f"→ 純手取り {ex.get('sale_net_man', 0):,.0f}万円／"
+            f"簡易IRR {f'{irr * 100:.1f}%' if irr is not None else '—'}／"
+            f"トータルリターン {ex.get('total_return_man', 0):,.0f}万円\n"
+        )
+
+    # 10-6 感度
+    tor = p.get("tornado") or []
+    if tor:
+        lines.append("\n### 10-6. 感度（結論を動かすドライバー）\n")
+        lines.append("| ドライバー | 指標 | 下振れ | 基準 | 上振れ |")
+        lines.append("|---|---|---:|---:|---:|")
+        for t in tor:
+            lines.append(
+                f"| {t.get('driver', '—')} | {t.get('metric', '—')} | {t.get('low', 0):,.0f} "
+                f"| {t.get('base', 0):,.0f} | {t.get('high', 0):,.0f} |"
+            )
+
+    # 10-7 融資候補
+    ld = p.get("lenders") or {}
+    if ld.get("candidates"):
+        lines.append("\n### 10-7. 融資候補（一般的傾向に基づく目安）\n")
+        lines.append("| 金融機関タイプ | 通りやすさ | 金利目安 | 期間目安 | 注意点 |")
+        lines.append("|---|---|---|---|---|")
+        for c in ld["candidates"]:
+            lines.append(
+                f"| {c.get('type', '—')} | {c.get('fit', '—')} | {c.get('rate_hint', '—')} "
+                f"| {c.get('term_hint', '—')} | {c.get('caveat', '—')} |"
+            )
+        lines.append(
+            "\n> 融資の可否・金利・LTV・年数は各社の商品要項と時期、申込人の属性で大きく変動します。"
+            "確定条件は各金融機関の個別審査で必ずご確認ください。\n"
+        )
+
+    warn = p.get("warnings") or []
+    if warn:
+        lines.append("\n### 10-8. 収益試算の注意事項\n")
+        for w in warn:
+            lines.append(f"- {w}")
+
+    return "\n".join(lines)
+
+
 def _section_score_detail(
     report: FeasibilityReport, weights: Optional[Dict[str, float]]
 ) -> str:
     score = compute_score(report, weights=weights)
     if score.blocked:
-        return f"## 10. 総合スコア詳細\n\nスコア計算ブロック：{score.blocked_reason}"
+        return f"## 11. 総合スコア詳細\n\nスコア計算ブロック：{score.blocked_reason}"
 
     lines = [
-        f"## 10. 総合スコア詳細\n",
+        f"## 11. 総合スコア詳細\n",
         f"**総合スコア**：{score.total:.1f} / 100　**グレード**：{score.grade}\n",
-        "### 10.1 17項目の内訳\n",
+        "### 11.1 17項目の内訳\n",
         "| カテゴリ | 項目 | スコア | 重み | 寄与 | コメント |",
         "|---------|------|------|------|------|--------|",
     ]
@@ -500,7 +703,7 @@ def _section_score_detail(
             f"| {item.weight:.1f} | {item.weighted:.0f} | {item.note} |"
         )
 
-    lines.append("\n### 10.2 グレード基準")
+    lines.append("\n### 11.2 グレード基準")
     lines.append(
         "| グレード | スコア範囲 | 意味 |\n"
         "|---------|----------|------|\n"
@@ -517,7 +720,7 @@ def _section_score_detail(
 def _section_todos(report: FeasibilityReport) -> str:
     if not report.todos:
         return ""
-    lines = ["## 11. TODOリスト\n"]
+    lines = ["## 12. TODOリスト\n"]
     lines.append(
         "判定パターン・総合判定・不足書類から自動生成された次アクション一覧。"
     )
@@ -541,7 +744,7 @@ def _section_todos(report: FeasibilityReport) -> str:
 def _section_missing_documents(report: FeasibilityReport) -> str:
     if not report.missing_documents:
         return ""
-    lines = ["## 12. 不足書類\n"]
+    lines = ["## 13. 不足書類\n"]
     lines.append("以下の書類を追加で取得すると、判定精度が向上します。")
     for d in report.missing_documents:
         lines.append(f"- 📄 {d}")
@@ -551,7 +754,7 @@ def _section_missing_documents(report: FeasibilityReport) -> str:
 def _section_extracted_documents(report: FeasibilityReport) -> str:
     if not report.extracted_documents:
         return ""
-    lines = ["## 13. 抽出書類\n"]
+    lines = ["## 14. 抽出書類\n"]
     lines.append(
         "アップロードされた書類から LLM が自動抽出した内容。"
     )

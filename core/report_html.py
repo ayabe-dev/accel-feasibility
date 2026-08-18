@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .models import (
     CheckStatus,
@@ -388,6 +388,7 @@ PATTERN_LABEL = {
 def generate_html_report(
     report: FeasibilityReport,
     weights: Optional[Dict[str, float]] = None,
+    chat_logs: Optional[Dict[str, List[Dict[str, str]]]] = None,
 ) -> str:
     """調査結果のHTMLレポートを生成."""
     weights = weights or DEFAULT_WEIGHTS
@@ -408,11 +409,13 @@ def generate_html_report(
         _render_fire_safety(report),
         _render_lodging(report),
         _render_cost_timeline(report),
+        _render_profitability(report),
         _render_score(score),
         _render_todos(report),
         _render_missing_docs(report),
         _render_extracted(report),
         _render_appendix(),
+        _render_chat_log(chat_logs),
     ]
     wrapped = [
         f'<section class="report-section">{s}</section>'
@@ -436,11 +439,12 @@ def generate_html_report(
 </html>"""
 
 
-def generate_pdf(report: FeasibilityReport, weights: Optional[Dict] = None) -> Optional[bytes]:
+def generate_pdf(report: FeasibilityReport, weights: Optional[Dict] = None,
+                 chat_logs: Optional[Dict[str, List[Dict[str, str]]]] = None) -> Optional[bytes]:
     """HTMLからPDFを生成。weasyprint未インストール時はNone."""
     if not _WEASYPRINT_AVAILABLE:
         return None
-    html = generate_html_report(report, weights=weights)
+    html = generate_html_report(report, weights=weights, chat_logs=chat_logs)
     try:
         pdf_bytes = WeasyHTML(string=html).write_pdf()
         return pdf_bytes
@@ -909,6 +913,281 @@ def _render_cost_timeline(report: FeasibilityReport) -> str:
 <td><strong>期間：{ce.total_months_min} 〜 {ce.total_months_max} ヶ月</strong></td></tr>
 </table>
 """
+
+
+def _fmt_rng(d, unit: str = "万円", fmt: str = ",.0f") -> str:
+    if not isinstance(d, dict):
+        return "—"
+    try:
+        return f"{d['mid']:{fmt}} {unit}（{d['min']:{fmt}} 〜 {d['max']:{fmt}}）"
+    except (KeyError, TypeError, ValueError):
+        return "—"
+
+
+def _render_profitability(report: FeasibilityReport) -> str:
+    """収益性・物件価値（profitability.compute の出力から）."""
+    p = getattr(report, "profitability", None)
+    if not p:
+        return ""
+    a = p.get("assumptions") or {}
+    nb = p.get("noi_breakdown_mid") or {}
+    v = p.get("valuation") or {}
+    mv = v.get("market_value_man") or {}
+    b = p.get("backward") or {}
+    fin = p.get("financing") or {}
+    ex = p.get("exit") or {}
+    occ = a.get("occupancy") or {}
+    unit_label = "一棟貸し" if p.get("revenue_unit") == "whole" else "客室ごと"
+
+    out = ["<h2>10. 収益性・物件価値（前提明示型の試算）</h2>"]
+    out.append(
+        '<p style="background:#FFF8E1;border-left:4px solid #F9A825;padding:8px 12px;">'
+        "⚠️ 本セクションは<strong>前提明示型の試算（estimate）</strong>であり、"
+        "鑑定評価・融資審査の代替ではありません。数値はレンジで確認してください。</p>"
+    )
+
+    # 前提
+    out.append("<h3>10-1. 収益の前提</h3><table>")
+    out.append("<tr><th>項目</th><th>値</th><th>出典・根拠</th></tr>")
+    out.append(
+        f"<tr><td>ADR（1泊単価）</td><td>{_fmt_rng(p.get('adr_yen'), '円')}</td>"
+        f"<td>{_esc(str(p.get('revpar_source', '—')))}</td></tr>"
+    )
+    if occ:
+        out.append(
+            f"<tr><td>稼働率</td><td>{occ.get('mid', 0) * 100:.1f}%"
+            f"（{occ.get('min', 0) * 100:.0f}〜{occ.get('max', 0) * 100:.0f}%）</td>"
+            "<td>同上</td></tr>"
+        )
+    out.append(f"<tr><td>課金モデル</td><td>{unit_label}</td><td>—</td></tr>")
+    out.append(
+        f"<tr><td>収益計算室数 / 客室数</td><td>{p.get('rooms_used_for_revenue', '—')} 室 "
+        f"/ {p.get('rooms', '—')} 室</td><td>—</td></tr>"
+    )
+    out.append(
+        f"<tr><td>最大定員の目安</td><td>{p.get('capacity_est', '—')} 名</td>"
+        "<td>専有面積 ÷ 1人あたり面積（実務上限でクランプ）</td></tr>"
+    )
+    out.append(
+        f"<tr><td>営業日数</td><td>{p.get('operating_days_used', '—')} 日</td>"
+        "<td>民泊は年180日上限</td></tr>"
+    )
+    out.append(
+        f"<tr><td>平均宿泊日数(LOS)</td><td>{p.get('avg_length_of_stay', '—')} 泊</td>"
+        "<td>清掃回数の分母</td></tr>"
+    )
+    out.append(
+        f"<tr><td>エリア区分</td><td>{_esc(str(p.get('area_tier', '—')))}</td>"
+        "<td>住所キーワード判定</td></tr>"
+    )
+    out.append(
+        f"<tr><td>残存耐用年数</td><td>{p.get('remaining_useful_life_years', '—')} 年</td>"
+        "<td>構造別法定耐用年数 − 築年数</td></tr>"
+    )
+    out.append(
+        f"<tr><td>設定バージョン</td><td>{_esc(str(p.get('config_version', '—')))}</td>"
+        f"<td>{_esc(str(p.get('as_of', '—')))} 時点</td></tr>"
+    )
+    out.append("</table>")
+    mc = p.get("market_comps")
+    if mc:
+        out.append(
+            f"<p><strong>近隣コンプ：</strong>{mc.get('comp_count', 0)}件を採用。"
+            f"{_esc(str(mc.get('note', '')))}</p>"
+        )
+
+    # NOI
+    out.append("<h3>10-2. NOI（USALI階層・標準シナリオ）</h3><table>")
+    out.append("<tr><th>段階</th><th>万円/年</th><th>内容</th></tr>")
+    rows = [
+        ("GPI（満室潜在収入）", nb.get("gpi", 0), "ADR × 室数 × 営業日数"),
+        ("客室収入", nb.get("room_revenue", 0), "GPI × 稼働率"),
+        ("清掃料金収入", nb.get("cleaning_revenue", 0), "1組あたり請求額 × 組数"),
+        ("<strong>EGI（実効総収入）</strong>", nb.get("egi", 0), "客室収入 ＋ 清掃料金収入"),
+        ("− 変動費", -abs(nb.get("variable", 0)), "OTA手数料・清掃原価・リネン・変動光熱"),
+        ("− 固定費", -abs(nb.get("fixed", 0)), "人件費・管理料・保険・固都税・基本光熱"),
+        ("− FF&amp;E積立", -abs(nb.get("ffe", 0)), "備品更新積立"),
+        ("<strong>= NOI（安定稼働）</strong>", nb.get("noi", 0), "—"),
+        ("NOI（初年度）", p.get("noi_year1_man", 0), "季節性＋開業立ち上がりを月次反映"),
+    ]
+    for label, val, note in rows:
+        out.append(f"<tr><td>{label}</td><td>{val:,.0f}</td><td>{note}</td></tr>")
+    out.append("</table>")
+    out.append(f"<p>NOIレンジ：{_fmt_rng(p.get('noi'))}</p>")
+    out.append(
+        f"<p>清掃前提：原価 {a.get('cleaning_cost_per_stay_man', 0) * 10000:,.0f}円/組、"
+        f"ゲスト請求 {a.get('cleaning_fee_per_stay_man', 0) * 10000:,.0f}円/組。"
+        "清掃は1泊ごとではなく<strong>1組ごと</strong>（稼働室夜 ÷ LOS）で計上。</p>"
+    )
+
+    # 価値
+    out.append("<h3>10-3. 物件価値と割安・割高</h3><ul>")
+    out.append(f"<li><strong>収益価格[A]</strong>（Inwood有期還元）：{_fmt_rng(p.get('income_value_man'))}</li>")
+    cv = p.get("cost_value_man")
+    out.append(
+        "<li><strong>原価法[B]</strong>："
+        + (f"{cv:,.0f} 万円" if cv is not None else "土地面積未入力のため算出なし")
+        + "</li>"
+    )
+    if mv:
+        out.append(f"<li><strong>想定適正価格レンジ</strong>：{_fmt_rng(mv)}</li>")
+    if v.get("asking_price_man"):
+        gap = v.get("gap_pct")
+        out.append(
+            f"<li><strong>売出価格</strong>：{v['asking_price_man']:,.0f} 万円 → "
+            f"<strong>判定：{_esc(str(v.get('price_verdict', '—')))}</strong>"
+            + (f"（相場mid比 {gap:+.1f}%）" if gap is not None else "")
+            + "</li>"
+        )
+    if v.get("basis"):
+        out.append(f"<li>判定基準：{_esc(str(v['basis']))}</li>")
+    out.append("</ul>")
+
+    # 逆算
+    if b:
+        out.append("<h3>10-4. 適正価格の逆算（目標NOIから）</h3><ul>")
+        out.append(f"<li>目標NOI利回り：<strong>{b.get('target_noi_yield', 0) * 100:.0f}%</strong></li>")
+        out.append(f"<li>総投資上限：{_fmt_rng(b.get('budget_cap_man'))}</li>")
+        out.append(
+            f"<li>初期費用（リノベ＋消防許可）：{_fmt_rng(b.get('initial_works_man'))}"
+            f"／根拠：{_esc(str(b.get('initial_works_source', '—')))}</li>"
+        )
+        out.append(
+            f"<li><strong>物件に払っていい適正価格</strong>：{_fmt_rng(b.get('fair_price_man'))}</li>"
+        )
+        if b.get("verdict"):
+            out.append(f"<li><strong>判定：{_esc(str(b['verdict']))}</strong></li>")
+        if b.get("suggested_discount_man"):
+            out.append(
+                f"<li>必要な指値額の目安：<strong>約 {b['suggested_discount_man']:,.0f} 万円</strong></li>"
+            )
+        out.append("</ul>")
+
+    # 資金計画・CF
+    out.append("<h3>10-5. 資金計画とキャッシュフロー（税引前）</h3>")
+    out.append(
+        f"<p>想定取得価格 {a.get('price_assumption_man', 0):,.0f}万円"
+        f"（{'手入力' if a.get('price_is_override') else '収益価格midを仮定'}）／"
+        f"借入 {a.get('loan_man', 0):,.0f}万円（LTV {a.get('ltv', 0) * 100:.0f}%）／"
+        f"自己資金 {a.get('equity_man', 0):,.0f}万円／"
+        f"金利 {a.get('loan_rate', 0) * 100:.1f}%・期間 {a.get('loan_term_years', '—')}年</p>"
+    )
+    out.append("<table><tr><th>シナリオ</th><th>DSCR</th><th>返済比率(対EGI)</th>"
+               "<th>年間CF(万円)</th><th>表面利回り</th><th>NOI利回り</th></tr>")
+
+    def _n(val, mult=1.0, fmt=".2f", suf=""):
+        return f"{val * mult:{fmt}}{suf}" if isinstance(val, (int, float)) else "—"
+
+    for key, lab in (("min", "弱気"), ("mid", "標準"), ("max", "強気")):
+        f = fin.get(key) or {}
+        out.append(
+            f"<tr><td>{lab}</td><td>{_n(f.get('dscr'))}</td>"
+            f"<td>{_n(f.get('repayment_ratio'), 100, '.1f', '%')}</td>"
+            f"<td>{_n(f.get('pretax_cf'), 1, ',.0f')}</td>"
+            f"<td>{_n(f.get('gross_yield'), 100, '.1f', '%')}</td>"
+            f"<td>{_n(f.get('noi_yield'), 100, '.1f', '%')}</td></tr>"
+        )
+    out.append("</table>")
+    out.append(f"<p><strong>儲かりやすさ判定（標準）：{_esc(str(p.get('verdict', '—')))}</strong></p>")
+
+    proj = (p.get("projection") or {}).get("10y")
+    if proj and proj.get("rows"):
+        out.append("<h4>10年キャッシュフロー（標準シナリオ・万円・税引前）</h4><table>")
+        out.append("<tr><th>年</th><th>NOI</th><th>年間CF</th><th>累計CF</th>"
+                   "<th>ローン残債</th><th>その年に売却した場合の純利益</th></tr>")
+        for r in proj["rows"]:
+            out.append(
+                f"<tr><td>{r['year']}</td><td>{r['noi']:,.0f}</td>"
+                f"<td>{r['annual_cf']:,.0f}</td><td>{r['cumulative_cf']:,.0f}</td>"
+                f"<td>{r['loan_balance']:,.0f}</td><td>{r['net_profit_if_sell']:,.0f}</td></tr>"
+            )
+        out.append("</table><p>1年目は開業立ち上がりを反映。</p>")
+
+    if ex:
+        irr = ex.get("simple_irr")
+        out.append(
+            f"<p><strong>出口（{ex.get('exit_year', '—')}年後）</strong>："
+            f"売却 {ex.get('sale_price_man', 0):,.0f}万円 − 残債 {ex.get('loan_balance_man', 0):,.0f}万円 "
+            f"→ 純手取り {ex.get('sale_net_man', 0):,.0f}万円／簡易IRR "
+            f"{f'{irr * 100:.1f}%' if irr is not None else '—'}／"
+            f"トータルリターン {ex.get('total_return_man', 0):,.0f}万円</p>"
+        )
+
+    # 感度
+    tor = p.get("tornado") or []
+    if tor:
+        out.append("<h3>10-6. 感度（結論を動かすドライバー）</h3><table>")
+        out.append("<tr><th>ドライバー</th><th>指標</th><th>下振れ</th><th>基準</th><th>上振れ</th></tr>")
+        for t in tor:
+            out.append(
+                f"<tr><td>{_esc(str(t.get('driver', '—')))}</td>"
+                f"<td>{_esc(str(t.get('metric', '—')))}</td>"
+                f"<td>{t.get('low', 0):,.0f}</td><td>{t.get('base', 0):,.0f}</td>"
+                f"<td>{t.get('high', 0):,.0f}</td></tr>"
+            )
+        out.append("</table>")
+
+    # 融資候補
+    ld = p.get("lenders") or {}
+    if ld.get("candidates"):
+        out.append("<h3>10-7. 融資候補（一般的傾向に基づく目安）</h3><table>")
+        out.append("<tr><th>金融機関タイプ</th><th>通りやすさ</th><th>金利目安</th>"
+                   "<th>期間目安</th><th>注意点</th></tr>")
+        for c in ld["candidates"]:
+            out.append(
+                f"<tr><td>{_esc(str(c.get('type', '—')))}</td>"
+                f"<td>{_esc(str(c.get('fit', '—')))}</td>"
+                f"<td>{_esc(str(c.get('rate_hint', '—')))}</td>"
+                f"<td>{_esc(str(c.get('term_hint', '—')))}</td>"
+                f"<td>{_esc(str(c.get('caveat', '—')))}</td></tr>"
+            )
+        out.append("</table>")
+        out.append(
+            "<p>融資の可否・金利・LTV・年数は各社の商品要項と時期、申込人の属性で大きく変動します。"
+            "確定条件は各金融機関の個別審査で必ずご確認ください。</p>"
+        )
+
+    warn = p.get("warnings") or []
+    if warn:
+        out.append("<h3>10-8. 収益試算の注意事項</h3><ul>")
+        for w in warn:
+            out.append(f"<li>{_esc(str(w))}</li>")
+        out.append("</ul>")
+
+    return "\n".join(out)
+
+
+def _render_chat_log(chat_logs) -> str:
+    """分析結果についての議論ログ."""
+    if not chat_logs:
+        return ""
+    try:
+        from .chat import SECTIONS
+    except Exception:  # noqa: BLE001
+        SECTIONS = {}
+    out = ["<h2>付録B. 分析結果についての議論ログ</h2>"]
+    any_msg = False
+    for key, msgs in chat_logs.items():
+        if not msgs:
+            continue
+        any_msg = True
+        label = SECTIONS.get(key, (key, ""))[0]
+        out.append(f"<h3>{_esc(str(label))}</h3>")
+        for m in msgs:
+            who = "質問" if m.get("role") == "user" else "回答"
+            bg = "#EEF3FA" if who == "質問" else "#F6F6F6"
+            body = _esc(str(m.get("content", ""))).replace("\n", "<br>")
+            out.append(
+                f'<p style="background:{bg};padding:8px 12px;border-radius:6px;">'
+                f"<strong>{who}：</strong>{body}</p>"
+            )
+    if not any_msg:
+        return ""
+    out.append(
+        "<p style=\"color:#64748b;\">上記はLLMによる議論の記録です。"
+        "前提明示型の試算に対する解釈であり、鑑定評価・法的助言ではありません。</p>"
+    )
+    return "\n".join(out)
 
 
 def _render_score(score) -> str:
