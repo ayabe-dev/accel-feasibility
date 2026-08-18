@@ -1,4 +1,103 @@
 {
+  "東京都目黒区中目黒1-1-1": {
+    "latitude": 35.6447,
+    "longitude": 139.6996,
+    "zoning_code": "first_residential",
+    "zoning_name": "第一種住居地域",
+    "fire_district": "quasi_fire_district",
+    "coverage_ratio_pct": 60,
+    "floor_area_ratio_pct": 300,
+    "notes": [
+      "デモデータ（中目黒駅周辺）",
+      "第一種住居地域＝旅館は3,000㎡以下なら立地可",
+      "※用途地域は例示。実際は「めぐろ地図情報サービス」(https://www.sonicweb-asp.jp/meguro/)で必ず確認"
+    ]
+  },
+  "東京都目黒区下目黒1-1-1": {
+    "latitude": 35.6339,
+    "longitude": 139.7156,
+    "zoning_code": "commercial",
+    "zoning_name": "商業地域",
+    "fire_district": "fire_district",
+    "coverage_ratio_pct": 80,
+    "floor_area_ratio_pct": 500,
+    "notes": [
+      "デモデータ（目黒駅周辺）",
+      "商業地域＝旅館の立地可・面積上限なし",
+      "※用途地域は例示。実際は「めぐろ地図情報サービス」(https://www.sonicweb-asp.jp/meguro/)で必ず確認"
+    ]
+  },
+  "東京都目黒区自由が丘1-25-9": {
+    "latitude": 35.6076,
+    "longitude": 139.669,
+    "zoning_code": "commercial",
+    "zoning_name": "商業地域",
+    "fire_district": "fire_district",
+    "coverage_ratio_pct": 80,
+    "floor_area_ratio_pct": 400,
+    "notes": [
+      "デモデータ（自由が丘駅周辺）",
+      "商業地域＝旅館の立地可",
+      "※用途地域は例示。実際は「めぐろ地図情報サービス」(https://www.sonicweb-asp.jp/meguro/)で必ず確認"
+    ]
+  },
+  "東京都目黒区鷹番3-2-1": {
+    "latitude": 35.6285,
+    "longitude": 139.6857,
+    "zoning_code": "neighborhood_commercial",
+    "zoning_name": "近隣商業地域",
+    "fire_district": "quasi_fire_district",
+    "coverage_ratio_pct": 80,
+    "floor_area_ratio_pct": 300,
+    "notes": [
+      "デモデータ（学芸大学駅周辺）",
+      "近隣商業地域＝旅館の立地可",
+      "※用途地域は例示。実際は「めぐろ地図情報サービス」(https://www.sonicweb-asp.jp/meguro/)で必ず確認"
+    ]
+  },
+  "東京都目黒区目黒本町3-1-1": {
+    "latitude": 35.6237,
+    "longitude": 139.696,
+    "zoning_code": "second_residential",
+    "zoning_name": "第二種住居地域",
+    "fire_district": "quasi_fire_district",
+    "coverage_ratio_pct": 60,
+    "floor_area_ratio_pct": 300,
+    "notes": [
+      "デモデータ（目黒本町）",
+      "第二種住居地域＝旅館の立地可（面積上限なし）",
+      "※用途地域は例示。実際は「めぐろ地図情報サービス」(https://www.sonicweb-asp.jp/meguro/)で必ず確認"
+    ]
+  },
+  "東京都目黒区青葉台2-1-1": {
+    "latitude": 35.6494,
+    "longitude": 139.6905,
+    "zoning_code": "first_low_residential",
+    "zoning_name": "第一種低層住居専用地域",
+    "fire_district": "no_district",
+    "coverage_ratio_pct": 50,
+    "floor_area_ratio_pct": 100,
+    "notes": [
+      "デモデータ（青葉台・低層住宅エリア／NG例）",
+      "第一種低層住居専用地域＝旅館は建築不可（目黒区手引き）",
+      "※用途地域は例示。実際は「めぐろ地図情報サービス」(https://www.sonicweb-asp.jp/meguro/)で必ず確認"
+    ]
+  },
+  "東京都目黒区駒場4-6-1": {
+    "latitude": 35.6595,
+    "longitude": 139.6836,
+    "zoning_code": "first_mid_residential",
+    "zoning_name": "第一種中高層住居専用地域",
+    "fire_district": "no_district",
+    "coverage_ratio_pct": 60,
+    "floor_area_ratio_pct": 200,
+    "notes": [
+      "デモデータ（駒場・NG例）",
+      "第一種中高層住居専用地域＝旅館は建築不可",
+      "文教地区の指定がある区域では用途地域にかかわらず旅館・ホテルは建築不可。建築課(03-5722-9637)へ要確認",
+      "※用途地域は例示。実際は「めぐろ地図情報サービス」(https://www.sonicweb-asp.jp/meguro/)で必ず確認"
+    ]
+  },
   "東京都新宿区西新宿2-8-1": {
     "latitude": 35.6896,
     "longitude": 139.6917,
@@ -7,17 +106,21 @@
     "fire_district": "fire_district",
     "coverage_ratio_pct": 80,
     "floor_area_ratio_pct": 1000,
-    "notes": ["デモデータ（東京都庁周辺）"]
+    "notes": [
+      "デモデータ（東京都庁周辺）"
+    ]
   },
   "東京都渋谷区道玄坂1-1-1": {
-    "latitude": 35.6580,
+    "latitude": 35.658,
     "longitude": 139.7016,
     "zoning_code": "commercial",
     "zoning_name": "商業地域",
     "fire_district": "fire_district",
     "coverage_ratio_pct": 80,
     "floor_area_ratio_pct": 800,
-    "notes": ["デモデータ（渋谷駅周辺）"]
+    "notes": [
+      "デモデータ（渋谷駅周辺）"
+    ]
   },
   "東京都世田谷区成城6-5-34": {
     "latitude": 35.6479,
@@ -27,17 +130,9 @@
     "fire_district": "no_district",
     "coverage_ratio_pct": 40,
     "floor_area_ratio_pct": 80,
-    "notes": ["デモデータ（成城学園周辺・住宅専用エリア）"]
-  },
-  "東京都目黒区中目黒1-1-1": {
-    "latitude": 35.6447,
-    "longitude": 139.6996,
-    "zoning_code": "first_residential",
-    "zoning_name": "第一種住居地域",
-    "fire_district": "quasi_fire_district",
-    "coverage_ratio_pct": 60,
-    "floor_area_ratio_pct": 300,
-    "notes": ["デモデータ（中目黒）"]
+    "notes": [
+      "デモデータ（成城学園周辺・住宅専用エリア）"
+    ]
   },
   "東京都港区六本木6-10-1": {
     "latitude": 35.6604,
@@ -47,7 +142,9 @@
     "fire_district": "fire_district",
     "coverage_ratio_pct": 80,
     "floor_area_ratio_pct": 700,
-    "notes": ["デモデータ（六本木ヒルズ周辺）"]
+    "notes": [
+      "デモデータ（六本木ヒルズ周辺）"
+    ]
   },
   "京都府京都市東山区祇園町南側": {
     "latitude": 35.0036,
@@ -57,6 +154,8 @@
     "fire_district": "fire_district",
     "coverage_ratio_pct": 80,
     "floor_area_ratio_pct": 400,
-    "notes": ["デモデータ（祇園・京都市条例の上乗せ規制あり）"]
+    "notes": [
+      "デモデータ（祇園・京都市条例の上乗せ規制あり）"
+    ]
   }
 }

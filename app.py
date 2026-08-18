@@ -88,17 +88,46 @@ def render_sidebar() -> None:
         st.write(f"**デモモード**: {'🟢 ON' if demo_mode else '🔴 OFF'}")
 
         st.divider()
+        st.markdown("### 📞 目黒区の相談窓口")
+        st.markdown(
+            "- 旅館業許可（衛生）：保健所 生活衛生課 環境衛生係\n"
+            "  `03-5722-9502`\n"
+            "- 用途変更・建基法：建築課 建築指導係\n"
+            "  `03-5722-9637`\n"
+            "- 建築士相談：東京都建築士事務所協会 目黒支部\n"
+            "  `03-5724-5061`"
+        )
+        st.caption(
+            "出典：目黒区「旅館業の手引き」令和6年1月改訂／"
+            "「既存住宅等を利用し、旅館・ホテルへの用途変更を検討している皆様へ」令和7年8月8日"
+        )
+
+        st.divider()
         st.markdown("### デモ用住所サンプル")
+        st.caption("**目黒区**（区の手引き・条例を実データで反映済み）")
+        st.code(
+            "東京都目黒区中目黒1-1-1（一種住居・3000㎡以下可）\n"
+            "東京都目黒区下目黒1-1-1（商業・上限なし）\n"
+            "東京都目黒区自由が丘1-25-9（商業）\n"
+            "東京都目黒区鷹番3-2-1（近隣商業・学芸大学）\n"
+            "東京都目黒区目黒本町3-1-1（二種住居）\n"
+            "東京都目黒区青葉台2-1-1（一種低層＝NG例）\n"
+            "東京都目黒区駒場4-6-1（一種中高層＝NG例）",
+            language="text",
+        )
+        st.caption("その他（東京都標準の当て込み）")
         st.code(
             "東京都新宿区西新宿2-8-1\n"
             "東京都渋谷区道玄坂1-1-1\n"
             "東京都世田谷区成城6-5-34（NG例）\n"
-            "東京都目黒区中目黒1-1-1\n"
             "東京都港区六本木6-10-1\n"
             "京都府京都市東山区祇園町南側",
             language="text",
         )
-        st.caption("デモモードではこれらの住所で動作確認できます。")
+        st.caption(
+            "デモモードではこれらの住所で動作確認できます。"
+            "用途地域は例示であり、目黒区は「めぐろ地図情報サービス」で必ず確認してください。"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -177,15 +206,22 @@ def render_input_tab() -> None:
     with col1:
         address = st.text_input(
             "物件所在地",
-            placeholder="例：東京都新宿区西新宿2-8-1",
-            help="住居表示または地番。デモモードでは上記サンプル住所で動作確認可能。",
+            value="東京都目黒区中目黒1-1-1",
+            placeholder="例：東京都目黒区中目黒1-1-1",
+            help="住居表示または地番。デモモードではサイドバーのサンプル住所で動作確認可能。"
+                 "目黒区は区の手引き・条例を実データで反映しています。",
         )
 
     with col2:
         business_type = st.selectbox(
             "業態",
-            options=[BusinessType.HOTEL_RYOKAN],
-            format_func=lambda x: {BusinessType.HOTEL_RYOKAN: "旅館・ホテル営業"}[x],
+            options=[BusinessType.HOTEL_RYOKAN, BusinessType.SIMPLE_LODGING],
+            format_func=lambda x: {
+                BusinessType.HOTEL_RYOKAN: "旅館・ホテル営業",
+                BusinessType.SIMPLE_LODGING: "簡易宿所営業",
+            }[x],
+            help="建築基準法上はどちらも「旅館・ホテル」用途。旅館業法の客室基準と"
+                 "定員基準（目黒区：旅館ホテル3㎡/人・簡易宿所1.5㎡/人）が異なります",
         )
 
     with st.expander("既知の情報があれば入力（任意）", expanded=False):
@@ -511,6 +547,31 @@ def render_report(report) -> None:
 
     # チャットに渡す収益性結果（②収益化タブを開いていれば計算済み）
     res_prof = getattr(report, "profitability", None) or st.session_state.get("prof_res")
+
+    # 適用した自治体ルールを明示（実データ反映済みか／東京都標準の当て込みか）
+    from core import municipality as _muni_mod
+    _mkey = _muni_mod.detect_municipality(report.input.address)
+    _mname = _muni_mod.get_municipality_name(_mkey)
+    if _mname and _muni_mod.is_detailed(_mkey):
+        _rule = _muni_mod.get_municipality_rule(_mkey)
+        st.success(
+            f"📗 **{_mname}** の条例・手引きを実データで反映して判定しています"
+            f"（出典時点：{_rule.get('as_of', '—')}）"
+        )
+        with st.expander(f"{_mname}の出典・相談窓口"):
+            for src in _rule.get("sources", []):
+                st.markdown(f"- [{src.get('title', '')}]({src.get('url', '')})")
+            st.markdown("**相談窓口**")
+            for c in _rule.get("contacts", []):
+                tel = c.get("tel", "")
+                fax = f"／FAX {c['fax']}" if c.get("fax") else ""
+                st.markdown(f"- {c.get('role', '')}：{c.get('dept', '')}　`{tel}`{fax}")
+    elif _mname:
+        st.info(
+            f"ℹ️ **{_mname}** は東京都/一般基準の当て込みで判定しています。"
+            "区独自の上乗せ条例・特別用途地区は反映されていないため、必ず所管窓口で確認してください。"
+            "（目黒区は区の手引き・条例を実データで反映済みです）"
+        )
 
     # レポート出力欄は「収益性の計算・チャットの描画が終わったあと」に中身を入れる。
     # ここでは場所だけ確保し、main() の最後で _fill_report_downloads() が埋める。
@@ -1269,7 +1330,13 @@ def _render_backward(res, report) -> None:
     # STEP2 売上ポテンシャル
     st.markdown("### STEP2 💰 売上ポテンシャル（定員→年間売上）")
     s1, s2, s3 = st.columns(3)
-    s1.metric("最大定員の目安", f"{res['capacity_est']} 名", help="専有面積 ÷ 1人あたり面積")
+    _cap_help = res.get("capacity_basis", "専有面積 ÷ 1人あたり面積")
+    if res.get("capacity_legal_max"):
+        _cap_help += (
+            f"／{res.get('municipality_name', '')}条例の法令上限は約{res['capacity_legal_max']}名"
+            "（実務は寝具・便所数・消防が先に頭打ち）"
+        )
+    s1.metric("最大定員の目安", f"{res['capacity_est']} 名", help=_cap_help)
     s2.metric("課金モデル", "一棟貸し" if res["revenue_unit"] == "whole" else "客室ごと")
     s3.metric("年間想定売上 GPI（mid）", f"{b['gpi_mid_man']:,.0f} 万円")
     st.caption(f"RevPAR算定：{res['revpar_source']}。年間売上 ＝ RevPAR(=ADR×稼働) × {res['rooms_used_for_revenue']}室 × 営業日数。")

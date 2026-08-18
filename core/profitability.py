@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from . import market_data
+from . import market_data, municipality
 from .models import BusinessType, FeasibilityReport
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "revenue_estimates.yaml"
@@ -438,11 +438,46 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     cap_per_guest = _CFG["constants"].get("capacity_m2_per_guest", 8.0)
     cap_max = int(_CFG["constants"].get("capacity_max", 16))
     capacity_raw = max(1, int(floor_area / cap_per_guest))
-    capacity_est = min(capacity_raw, cap_max)
-    if capacity_raw > cap_max:
+    capacity_practical = min(capacity_raw, cap_max)
+
+    # 自治体条例の定員上限（有効面積○㎡につき1人）。実データがある自治体のみ適用。
+    muni_key = municipality.detect_municipality(inp.address)
+    muni_rule = municipality.get_municipality_rule(muni_key)
+    muni_cap = muni_rule.get("capacity") or {}
+    capacity_legal_max = None
+    if muni_cap:
+        if bt == BusinessType.SIMPLE_LODGING:
+            per_guest_legal = muni_cap.get("simple_lodging_m2_per_guest")
+        else:
+            per_guest_legal = muni_cap.get("hotel_ryokan_m2_per_guest")
+        if per_guest_legal:
+            effective_area = floor_area * eff_ratio
+            capacity_legal_max = max(1, int(effective_area / float(per_guest_legal)))
+
+    # 収益計算に使う定員は「実務目安」と「法令上限」の小さい方（法令超過を防ぐ）
+    capacity_est = capacity_practical
+    capacity_basis = f"面積÷{cap_per_guest}㎡/人（実務目安）"
+    if capacity_legal_max is not None and capacity_legal_max < capacity_practical:
+        capacity_est = capacity_legal_max
+        capacity_basis = (
+            f"{muni_rule.get('name', muni_key)}条例の法令上限"
+            f"（有効面積÷{per_guest_legal}㎡/人）"
+        )
+        warnings.append(
+            f"{muni_rule.get('name', muni_key)}条例の定員上限{capacity_legal_max}名が"
+            f"実務目安{capacity_practical}名より小さいため、法令上限を採用しました。"
+        )
+    elif capacity_raw > cap_max:
         warnings.append(
             f"面積からの定員目安{capacity_raw}名を実務上限{cap_max}名にクランプしました"
             "（消防・旅館業の実務上、面積に比例して定員を増やし続けることはできません）。"
+        )
+    if capacity_legal_max is not None and capacity_legal_max > capacity_est:
+        warnings.append(
+            f"参考：{muni_rule.get('name', muni_key)}条例上の定員上限は約{capacity_legal_max}名"
+            f"（有効面積{floor_area * eff_ratio:.0f}㎡÷{per_guest_legal}㎡/人）ですが、"
+            f"収益試算は実務目安の{capacity_est}名で計算しています"
+            "（寝具・便所数・消防設備が先に頭打ちになるため）。"
         )
 
     # 課金モデル：whole=一棟貸し（建物まるごとの1泊単価）／ per_room=客室ごと
@@ -755,6 +790,12 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
         "rooms_used_for_revenue": rooms_used,
         "revenue_unit": revenue_unit,
         "capacity_est": capacity_est,
+        "capacity_practical": capacity_practical,
+        "capacity_legal_max": capacity_legal_max,
+        "capacity_basis": capacity_basis,
+        "municipality_key": muni_key,
+        "municipality_name": muni_rule.get("name"),
+        "municipality_detail_level": muni_rule.get("detail_level", "generic"),
         "room_area_m2": room_area,
         "floor_area_m2": floor_area,
         "remaining_useful_life_years": remaining,

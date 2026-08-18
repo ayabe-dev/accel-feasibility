@@ -654,6 +654,8 @@ def render_guide_page() -> None:
         st.info(f"📊 現在の重み合計: **{total_w:.1f}**")
 
     st.divider()
+    _render_municipality_section()
+    st.divider()
 
     # カテゴリ別にグループ化
     cats: Dict[str, List[Dict]] = {}
@@ -673,6 +675,114 @@ def render_guide_page() -> None:
         st.header(f"📂 {cat}")
         for rule in rules:
             _render_rule(rule)
+
+
+def _render_municipality_section() -> None:
+    """自治体固有ルール（実データで作り込み済みの自治体）を表示する."""
+    from core import municipality as _m
+
+    st.header("🏛️ 自治体固有ルール（実データ反映済み）")
+    st.caption(
+        "汎用の法令チェックに加えて、区が独自に公表している条例・手引きの数値を"
+        "そのまま反映している自治体です。該当住所を入力すると判定に自動で反映されます。"
+    )
+
+    rule = _m.get_municipality_rule("meguro_ku")
+    if not rule:
+        st.info("自治体固有データは未登録です。")
+        return
+
+    with st.expander("📗 目黒区（区の手引き・条例を実データで反映）", expanded=True):
+        st.markdown(f"**出典時点**：{rule.get('as_of', '—')}")
+        for src in rule.get("sources", []):
+            st.markdown(f"- [{src.get('title', '')}]({src.get('url', '')})")
+
+        st.markdown("#### 旅館業法・区条例の数値基準")
+        cap = rule.get("capacity", {})
+        ra = rule.get("room_area", {})
+        fee = rule.get("application_fee_yen", {})
+        wb = rule.get("washbasin", {})
+        st.table({
+            "項目": [
+                "客室面積（旅館・ホテル）", "客室面積（簡易宿所）",
+                "定員（旅館・ホテル）", "定員（簡易宿所）",
+                "面積算定", "客室の地階", "窓のない客室",
+                "洗面（共同）", "申請手数料（旅館・ホテル）", "申請手数料（簡易宿所）",
+            ],
+            "基準": [
+                f"1室 {ra.get('min_m2')}㎡以上（寝台を置く客室は {ra.get('bed_only_min_m2')}㎡以上）",
+                f"客室延床 {ra.get('simple_lodging_total_min_m2')}㎡以上"
+                f"（10人未満は {ra.get('simple_lodging_per_guest_m2')}㎡×人数）",
+                f"有効面積 {cap.get('hotel_ryokan_m2_per_guest')}㎡につき1人",
+                f"有効面積 {cap.get('simple_lodging_m2_per_guest')}㎡につき1人",
+                ra.get("measurement", "—"),
+                "原則設けられない" if ra.get("basement_prohibited") else "—",
+                "不可" if ra.get("window_required") else "—",
+                f"定員 {wb.get('guests_per_tap')}人につき1給水栓",
+                f"{fee.get('hotel_ryokan', 0):,}円",
+                f"{fee.get('simple_lodging', 0):,}円",
+            ],
+            "根拠": [
+                "令1-1-1", "令1-2-1／条9-1-5", "条4-*-6-ア", "条4-*-6-イ",
+                "手引き", "手引き", "手引き", "規12", "手引き", "手引き",
+            ],
+        })
+
+        st.markdown("#### 便所の必要数（合計定員別・規11-*-1）")
+        table = (rule.get("toilet_count_by_capacity") or {}).get("table", [])
+        st.table({
+            "合計定員": [f"{r['up_to']}人以下" for r in table],
+            "必要便器数": [r["count"] for r in table],
+        })
+        st.caption((rule.get("toilet_count_by_capacity") or {}).get("over_30_note", ""))
+
+        st.markdown("#### 玄関帳場（フロント）")
+        fd = rule.get("front_desk", {})
+        if fd.get("unmanned_allowed") is False:
+            st.error("⚠️ **完全無人運営は不可**（従業員の常駐が必要）— 旅館・ホテル/簡易宿所/下宿すべて")
+        st.markdown("代替設備を使う場合の要件：")
+        for req in fd.get("substitute_requirements", []):
+            st.markdown(f"- {req}")
+        st.caption(
+            f"カメラ要件：{fd.get('camera_requirements', '')}／"
+            f"フロント別置は{fd.get('remote_front_desk_max_distance_m', '—')}m以内"
+        )
+
+        st.markdown("#### 用途地域（旅館・ホテル）")
+        z = rule.get("zoning", {})
+        st.markdown("**立地可**：" + "／".join(z.get("allowed", [])))
+        st.markdown("**立地不可**：" + "／".join(z.get("prohibited", [])))
+        st.warning(
+            "**区内に指定のない用途地域**：" + "／".join(z.get("not_designated_in_ward", []))
+            + f"（{z.get('not_designated_note', '')}）"
+        )
+        for sp in z.get("special_district_prohibitions", []):
+            st.error(f"⛔ {sp}")
+        for ex in z.get("extra_notes", []):
+            st.caption(f"・{ex}")
+        if z.get("map_service"):
+            st.info(f"用途地域の確認：{z['map_service']}")
+
+        st.markdown("#### 建築基準法の注意点（区公表資料）")
+        bc = rule.get("building_code_notes", {})
+        for b in bc.get("blocking", []):
+            st.error(f"⛔ **{b.get('title')}** — {b.get('detail')}")
+        for m in bc.get("major", []):
+            st.markdown(f"- **{m.get('title')}**：{m.get('detail')}")
+        if bc.get("note_200m2"):
+            st.warning(bc["note_200m2"])
+        rec = rule.get("record_availability", {})
+        if rec.get("note"):
+            st.caption(f"記録照会：{rec['note']}")
+
+        st.markdown("#### 維持管理・遵守事項")
+        for e in rule.get("extra_rules", []):
+            st.markdown(f"- {e}")
+
+        st.markdown("#### 相談窓口")
+        for c in rule.get("contacts", []):
+            fax = f"／FAX {c['fax']}" if c.get("fax") else ""
+            st.markdown(f"- **{c.get('role')}**：{c.get('dept')}　`{c.get('tel')}`{fax}")
 
 
 def _render_rule(rule: Dict) -> None:

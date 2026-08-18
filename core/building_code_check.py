@@ -9,7 +9,10 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional
+
+import yaml
 
 from .models import (
     BuildingCodeCheckItem,
@@ -322,11 +325,76 @@ def _check_law_20(project: ProjectInput) -> BuildingCodeCheckItem:
 # ----------------------------------------------------------------------
 
 
+def _municipality_building_notes(municipality_key: Optional[str]) -> List[BuildingCodeCheckItem]:
+    """自治体が公表している用途変更の注意点をチェック項目として追加する.
+
+    目黒区のように区が独自にPDFで注意喚起している項目（路地状敷地・3階以上の耐火・
+    共同住宅の容積緩和喪失など）は、汎用の法令チェックだけでは拾えないため別建てで出す。
+    """
+    cfg_path = Path(__file__).resolve().parent.parent / "config" / "municipality_rules.yaml"
+    if not municipality_key or not cfg_path.exists():
+        return []
+    with cfg_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    muni = (data.get("municipalities") or {}).get(municipality_key) or {}
+    notes = muni.get("building_code_notes") or {}
+    name = muni.get("name", municipality_key)
+    items: List[BuildingCodeCheckItem] = []
+
+    for b in notes.get("blocking", []):
+        items.append(BuildingCodeCheckItem(
+            rule_id=f"muni_block_{b.get('id', 'x')}",
+            rule_name=f"⛔ {b.get('title', '')}",
+            article=f"{name}（区公表資料）",
+            status=CheckStatus.NEEDS_REVIEW,
+            requirement=b.get("detail", ""),
+            recommended_action="該当すると事業化不可。物件調査の最初に建築課へ確認すること",
+            impact="high",
+        ))
+    for m in notes.get("major", []):
+        items.append(BuildingCodeCheckItem(
+            rule_id=f"muni_note_{m.get('id', 'x')}",
+            rule_name=m.get("title", ""),
+            article=f"{name}（区公表資料）",
+            status=CheckStatus.NEEDS_REVIEW,
+            requirement=m.get("detail", ""),
+            recommended_action="建築士に調査・適合計画を依頼",
+            impact="high" if m.get("id") in ("fireproof_3f", "far_relaxation_lost", "retroactive") else "medium",
+        ))
+    if notes.get("note_200m2"):
+        items.append(BuildingCodeCheckItem(
+            rule_id="muni_note_200m2",
+            rule_name="用途変更面積200㎡以下でも建基法適合は必要",
+            article=f"{name}（区公表資料）",
+            status=CheckStatus.NEEDS_REVIEW,
+            requirement=notes["note_200m2"],
+            recommended_action="確認申請が不要でも建築士に適合確認を依頼",
+            impact="medium",
+        ))
+
+    rec = muni.get("record_availability") or {}
+    if rec.get("confirmation_certificate_since_year"):
+        items.append(BuildingCodeCheckItem(
+            rule_id="muni_record_availability",
+            rule_name="確認済証・検査済証の照会可能範囲",
+            article=f"{name}（区公表資料）",
+            status=CheckStatus.NEEDS_REVIEW,
+            requirement=rec.get("note", ""),
+            recommended_action=(
+                f"{rec['confirmation_certificate_since_year']}年より前の建物は区でも記録照会できない"
+                "可能性が高い。ガイドライン調査（パターンD相当）を前提に見積もること"
+            ),
+            impact="medium",
+        ))
+    return items
+
+
 def run_building_code_checks(
-    project: ProjectInput, geo: GeoLookupResult
+    project: ProjectInput, geo: GeoLookupResult,
+    municipality_key: Optional[str] = None,
 ) -> List[BuildingCodeCheckItem]:
     """全規定のチェックを実行."""
-    return [
+    items = [
         _check_law_27(project),
         _check_ord_121(project),
         _check_ord_119(project),
@@ -338,6 +406,8 @@ def run_building_code_checks(
         _check_ord_112(project),
         _check_law_20(project),
     ]
+    items.extend(_municipality_building_notes(municipality_key))
+    return items
 
 
 # ----------------------------------------------------------------------

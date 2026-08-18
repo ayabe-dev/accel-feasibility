@@ -79,15 +79,94 @@ def missing_documents(
     return [DOC_LABELS.get(dt, dt.value) for dt in missing]
 
 
+def _municipality_todos(municipality_key) -> List[TodoItem]:
+    """自治体固有の最優先確認事項をTODO化する（窓口の電話番号つき）."""
+    from .municipality import get_municipality_rule
+    muni = get_municipality_rule(municipality_key)
+    if not muni or muni.get("detail_level") != "full":
+        return []
+    name = muni.get("name", municipality_key)
+    todos: List[TodoItem] = []
+
+    # 建築課の電話番号を引く
+    tel_kenchiku = ""
+    tel_hokenjo = ""
+    for c in muni.get("contacts", []):
+        if "建築" in (c.get("dept") or "") and not tel_kenchiku:
+            tel_kenchiku = c.get("tel", "")
+        if "生活衛生" in (c.get("dept") or "") and not tel_hokenjo:
+            tel_hokenjo = c.get("tel", "")
+
+    # 事業化不可になり得る条件は最優先
+    for b in (muni.get("building_code_notes") or {}).get("blocking", []):
+        todos.append(TodoItem(
+            title=f"【最優先】{b.get('title', '')}の該当有無を確認",
+            description=(
+                f"{name}：{b.get('detail', '')}"
+                + (f"／確認先：建築課 建築指導係 {tel_kenchiku}" if tel_kenchiku else "")
+            ),
+            priority="high",
+            owner="クライアント",
+            estimated_days=1,
+        ))
+
+    # 用途地域の確認（区の地図サービス）
+    z = muni.get("zoning") or {}
+    if z.get("map_service"):
+        todos.append(TodoItem(
+            title="用途地域・地区計画・特別用途地区の確認",
+            description=(
+                f"{name}：{z['map_service']} で用途地域を確認。"
+                + "／".join(z.get("special_district_prohibitions", []))
+                + "／" + "／".join(z.get("extra_notes", []))
+            ),
+            priority="high",
+            owner="クライアント",
+            estimated_days=1,
+        ))
+
+    # 保健所への事前相談
+    if tel_hokenjo:
+        todos.append(TodoItem(
+            title=f"{name}保健所へ事前相談（図面持参）",
+            description=(
+                f"生活衛生課 環境衛生係 {tel_hokenjo}。申請場所・構造設備について図面等を持参して相談。"
+                "玄関帳場（代替設備の可否）・客室面積・定員・便所数・洗面設備を事前に詰める。"
+                + (f"／完全無人運営は不可（従業員常駐が必要）"
+                   if (muni.get("front_desk") or {}).get("unmanned_allowed") is False else "")
+            ),
+            priority="high",
+            owner="クライアント",
+            estimated_days=7,
+        ))
+
+    # 建築課への事前相談
+    if tel_kenchiku:
+        todos.append(TodoItem(
+            title=f"{name}建築課へ事前相談",
+            description=(
+                f"建築課 建築指導係 {tel_kenchiku}。用途変更の可否・既存遡及の範囲・"
+                "耐火要件・区画・接道を確認。確認済証／検査済証の記録照会も併せて依頼。"
+            ),
+            priority="high",
+            owner="建築士",
+            estimated_days=7,
+        ))
+    return todos
+
+
 def generate_todos(
     pattern: InvestigationPattern,
     overall_level: JudgmentLevel,
     zoning: ZoningJudgment,
     missing_docs: List[str],
     milestone_flags: List[str],
+    municipality_key=None,
 ) -> List[TodoItem]:
     """総合判定とパターンに応じた TODO 生成."""
     todos: List[TodoItem] = []
+    # 自治体固有の最優先事項を先頭に（見落とすと後戻りが大きい）
+    todos.extend(_municipality_todos(municipality_key))
 
     # NO-GO ならまず中止 or 別物件検討
     if overall_level == JudgmentLevel.NO_GO:

@@ -139,6 +139,7 @@ def run(
         zoning=zoning,
         missing_docs=missing,
         milestone_flags=milestone_flags,
+        municipality_key=municipality_key,
     )
 
     # 9. 警告
@@ -154,7 +155,7 @@ def run(
     application_req = judge_application_requirement(project, geo, zoning)
 
     # 11. Phase 4：建基法技術基準チェックリスト
-    building_checks = run_building_code_checks(project, geo)
+    building_checks = run_building_code_checks(project, geo, municipality_key)
 
     # 12. Phase 5：消防法 + 旅館業法チェック
     fire_checks = run_fire_safety_checks(project)
