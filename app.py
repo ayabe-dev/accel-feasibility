@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import List
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -35,6 +36,8 @@ from core.report_generator import generate_markdown_report
 from core.report_html import generate_html_report, generate_pdf, is_pdf_available
 from core.scoring import DEFAULT_WEIGHTS, compute_score
 from guide import render_guide_page
+import ui_charts as charts
+import ui_chat
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +134,9 @@ def main() -> None:
             "実行後、ここに結果が表示されます。"
         )
 
+    # レポートDL欄のスロットは毎回作り直す（前回runのコンテナ参照を使い回さない）
+    st.session_state["_report_dl_slot"] = None
+
     with tab_input:
         render_input_tab()
 
@@ -157,6 +163,10 @@ def main() -> None:
 
     with tab_rules:
         render_guide_page()
+
+    # 全タブの計算が終わったあとにレポートDLを生成（最新の前提・議論ログを反映）
+    if st.session_state.get("report") is not None:
+        _fill_report_downloads(st.session_state.report)
 
 
 def render_input_tab() -> None:
@@ -406,6 +416,91 @@ def render_input_tab() -> None:
         st.balloons()
 
 
+def _fill_report_downloads(report) -> None:
+    """確保しておいたスロットにレポートDLボタンを描画する（全タブ描画後に呼ぶ）."""
+    slot = st.session_state.get("_report_dl_slot")
+    if slot is None:
+        return
+    from datetime import datetime as _dt
+
+    weights = st.session_state.get("weights", DEFAULT_WEIGHTS)
+    # 収益性：収益化タブで計算済みならそれを使う。未計算なら既定前提で計算してレポートに載せる。
+    if not getattr(report, "profitability", None):
+        cached = st.session_state.get("prof_res")
+        if cached:
+            report.profitability = cached
+        else:
+            try:
+                report.profitability = profitability.compute(report, overrides={})
+            except Exception:  # noqa: BLE001
+                pass
+    chat_logs = ui_chat.all_logs()
+
+    try:
+        md_report = generate_markdown_report(report, weights=weights, chat_logs=chat_logs)
+        html_report = generate_html_report(report, weights=weights, chat_logs=chat_logs)
+    except Exception as e:  # noqa: BLE001
+        with slot:
+            st.error(f"レポート生成でエラー：{e}")
+        return
+
+    fname_safe_addr = (
+        (report.input.address or "report").replace("/", "_").replace(" ", "_")[:30]
+    )
+    timestamp = _dt.now().strftime("%Y%m%d_%H%M")
+    fname_base = f"feasibility_{fname_safe_addr}_{timestamp}"
+
+    with slot:
+        st.caption(
+            "法規判定・収益性・キャッシュフロー・議論ログをまとめて出力します"
+            "（収益性は「②収益化できるか」タブの現在の前提を反映）。"
+        )
+        dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
+        with dl_col1:
+            st.download_button(
+                label="🌐 HTML（ブラウザで開く）",
+                data=html_report.encode("utf-8"),
+                file_name=f"{fname_base}.html",
+                mime="text/html",
+                use_container_width=True,
+                help="ダブルクリックでブラウザに表示。Cmd+P で PDF 化も可能",
+            )
+        with dl_col2:
+            pdf_bytes = generate_pdf(report, weights=weights, chat_logs=chat_logs)
+            if pdf_bytes:
+                st.download_button(
+                    label="📑 PDF（印刷向け）",
+                    data=pdf_bytes,
+                    file_name=f"{fname_base}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    help="weasyprintで自動生成。レイアウト崩れ時はHTML+ブラウザ印刷を推奨",
+                )
+            else:
+                st.button(
+                    "📑 PDF（要weasyprint）",
+                    disabled=True,
+                    use_container_width=True,
+                    help="weasyprint未インストール。HTMLをダウンロード→ブラウザで開く→ Cmd+P でPDF保存",
+                )
+        with dl_col3:
+            st.download_button(
+                label="📝 Markdown（編集用）",
+                data=md_report.encode("utf-8"),
+                file_name=f"{fname_base}.md",
+                mime="text/markdown",
+                use_container_width=True,
+                help="編集・差分管理・社内Wikiへの貼り付けに",
+            )
+        with dl_col4:
+            ui_chat.render_transcript_download()
+        if not is_pdf_available():
+            st.caption(
+                "💡 PDFを直接生成するには `pip install weasyprint` が必要です。"
+                "未インストールの場合は HTML をダウンロード→ブラウザで開く→ Cmd+P で PDF保存できます。"
+            )
+
+
 def render_report(report) -> None:
     st.divider()
     st.header("4. 判定結果")
@@ -414,60 +509,14 @@ def render_report(report) -> None:
     weights = st.session_state.get("weights", DEFAULT_WEIGHTS)
     score = compute_score(report, weights=weights)
 
-    # レポートのダウンロード（HTML / PDF / Markdown）
-    from datetime import datetime as _dt
+    # チャットに渡す収益性結果（②収益化タブを開いていれば計算済み）
+    res_prof = getattr(report, "profitability", None) or st.session_state.get("prof_res")
 
-    md_report = generate_markdown_report(report, weights=weights)
-    html_report = generate_html_report(report, weights=weights)
-    fname_safe_addr = (
-        (report.input.address or "report").replace("/", "_").replace(" ", "_")[:30]
-    )
-    timestamp = _dt.now().strftime("%Y%m%d_%H%M")
-    fname_base = f"feasibility_{fname_safe_addr}_{timestamp}"
-
+    # レポート出力欄は「収益性の計算・チャットの描画が終わったあと」に中身を入れる。
+    # ここでは場所だけ確保し、main() の最後で _fill_report_downloads() が埋める。
+    # （そうしないと、前提を変えた直後のレポートが1操作分古くなる）
     st.markdown("### 📥 レポート出力")
-    dl_col1, dl_col2, dl_col3 = st.columns(3)
-    with dl_col1:
-        st.download_button(
-            label="🌐 HTML（ブラウザで開く）",
-            data=html_report.encode("utf-8"),
-            file_name=f"{fname_base}.html",
-            mime="text/html",
-            use_container_width=True,
-            help="ダブルクリックでブラウザに表示。Cmd+P で PDF 化も可能",
-        )
-    with dl_col2:
-        pdf_bytes = generate_pdf(report, weights=weights)
-        if pdf_bytes:
-            st.download_button(
-                label="📑 PDF（印刷向け）",
-                data=pdf_bytes,
-                file_name=f"{fname_base}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-                help="weasyprintで自動生成。レイアウト崩れ時はHTML+ブラウザ印刷を推奨",
-            )
-        else:
-            st.button(
-                "📑 PDF（要weasyprint）",
-                disabled=True,
-                use_container_width=True,
-                help="weasyprint未インストール。HTMLをブラウザで開いて Cmd+P で PDF 化してください",
-            )
-    with dl_col3:
-        st.download_button(
-            label="📝 Markdown（編集用）",
-            data=md_report.encode("utf-8"),
-            file_name=f"{fname_base}.md",
-            mime="text/markdown",
-            use_container_width=True,
-            help="編集・差分管理・社内Wikiへの貼り付けに",
-        )
-    if not is_pdf_available():
-        st.caption(
-            "💡 PDFを直接生成するには `pip install weasyprint` が必要です。"
-            "未インストールの場合は HTML をダウンロード→ブラウザで開く→ Cmd+P で PDF保存できます。"
-        )
+    st.session_state["_report_dl_slot"] = st.container()
 
     # 総合判定カード
     level_color = {
@@ -575,6 +624,8 @@ def render_report(report) -> None:
                         )
                         st.caption(item.note)
 
+        ui_chat.chat_panel("overall", report, res_prof, expanded=True)
+
     with tab1:
         st.markdown("#### 立地・用途地域")
         st.write(f"**住所**: {report.geo.address}")
@@ -626,6 +677,8 @@ def render_report(report) -> None:
         if report.distance and report.distance.has_issue:
             st.warning(report.distance.note)
 
+        ui_chat.chat_panel("location", report, res_prof, expanded=False)
+
     with tab2:
         st.markdown(f"#### 調査パターン：**{report.pattern.value}**")
         st.write(report.pattern_reason)
@@ -633,6 +686,8 @@ def render_report(report) -> None:
             st.markdown("#### ⚠️ 注意事項")
             for w in report.warnings:
                 st.warning(w)
+
+        ui_chat.chat_panel("pattern", report, res_prof, expanded=False)
 
     with tab3:
         if report.cost_estimate is None:
@@ -672,6 +727,8 @@ def render_report(report) -> None:
             with st.expander("工事フェーズ"):
                 for t in ce.renovation_tasks:
                     st.write(f"- {t}")
+
+        ui_chat.chat_panel("cost", report, res_prof, expanded=False)
 
     with tab4:
         st.markdown("#### 用途変更確認申請の要否")
@@ -1067,11 +1124,66 @@ def _profit_overrides() -> dict:
         with mc3:
             works_in = st.number_input("初期費用 リノベ＋消防許可（万円・空欄=自動）", min_value=0.0, value=0.0, step=100.0, key="prof_works")
         st.markdown("**Airbnb/民泊 相場（手動・任意）** — 近隣のADR・稼働率を入れると反映（一棟貸しなら建物1棟の1泊単価）")
-        ac1, ac2 = st.columns(2)
+        ac1, ac2, ac3 = st.columns(3)
         with ac1:
-            adr = st.number_input("ADR（円/泊）", min_value=0, value=0, step=1000, key="prof_adr")
+            adr = st.number_input("ADR（円/泊）", min_value=0, value=0, step=1000, key="prof_adr",
+                                  help="1件だけの単一値。入力するとコンプ表より優先されます")
         with ac2:
             occ = st.slider("想定稼働率（%）", 0, 100, 0, 5, key="prof_occ")
+        with ac3:
+            los = st.number_input("平均宿泊日数（泊）", min_value=1.0, max_value=14.0,
+                                  value=3.0, step=0.5, key="prof_los",
+                                  help="清掃回数の分母。長期滞在が多いほど清掃費は下がります")
+
+        st.markdown("---")
+        st.markdown(
+            "**📊 近隣コンプ（類似物件）を入れてADR相場を作る** — "
+            "AirDNA等で調べた近隣の類似スペック物件を数件入れると、"
+            "中央値をmid・四分位をレンジとして採用します（単一値の±15%より実勢に近くなります）"
+        )
+        comp_df = st.data_editor(
+            pd.DataFrame(
+                [{"物件メモ": "", "ADR（円/泊）": None, "稼働率（%）": None} for _ in range(4)]
+            ),
+            key="prof_comps",
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "物件メモ": st.column_config.TextColumn("物件メモ", help="物件名・スペックなど（任意）"),
+                "ADR（円/泊）": st.column_config.NumberColumn(
+                    "ADR（円/泊）", min_value=0, step=1000, format="%d"),
+                "稼働率（%）": st.column_config.NumberColumn(
+                    "稼働率（%）", min_value=0, max_value=100, step=1, format="%d"),
+            },
+        )
+        comps = []
+        try:
+            for _, row in comp_df.iterrows():
+                a = row.get("ADR（円/泊）")
+                o = row.get("稼働率（%）")
+                if (a is not None and not pd.isna(a) and float(a) > 0) or \
+                   (o is not None and not pd.isna(o) and float(o) > 0):
+                    comps.append({
+                        "name": ("" if pd.isna(row.get("物件メモ")) else str(row.get("物件メモ"))),
+                        "adr_yen": (None if a is None or pd.isna(a) else float(a)),
+                        "occupancy": (None if o is None or pd.isna(o) else float(o)),
+                    })
+        except Exception:  # noqa: BLE001
+            comps = []
+        if comps:
+            st.caption(f"✅ コンプ {len(comps)}件を反映します（手動ADRが入っている場合は手動が優先）")
+
+        st.markdown("**清掃費（1組あたり・空欄=課金モデル別の既定値）**")
+        cl1, cl2 = st.columns(2)
+        with cl1:
+            clean_cost = st.number_input("清掃の原価（円/組）", min_value=0, value=0, step=1000,
+                                         key="prof_clean_cost",
+                                         help="一棟貸し既定=12,000円／客室ごと既定=4,000円")
+        with cl2:
+            clean_fee = st.number_input("ゲストへ請求する清掃料金（円/組）", min_value=0, value=0,
+                                        step=1000, key="prof_clean_fee",
+                                        help="既定0＝『ADRに清掃費が含まれている』想定。"
+                                             "ADRとは別に請求している場合のみ入れてください（二重計上防止）")
     return {
         "land_area_m2": land_area or None,
         "room_area_m2": room_area or None,
@@ -1080,6 +1192,10 @@ def _profit_overrides() -> dict:
         "exit_year": int(exit_year),
         "adr_yen": (adr or None),
         "occupancy_input": (occ / 100.0) if occ else None,
+        "avg_length_of_stay": los,
+        "comps": comps or None,
+        "cleaning_cost_man": (clean_cost / 10000.0) if clean_cost else None,
+        "cleaning_fee_man": (clean_fee / 10000.0) if clean_fee else None,
         "revenue_unit": "whole" if unit_label.startswith("一棟") else "per_room",
         "target_noi_yield": target_yield / 100.0,
         "initial_works_man": (works_in or None),
@@ -1105,14 +1221,26 @@ def _render_cf_projection(proj, label):
         "ローン残債(万円)": [f"{r['loan_balance']:,.0f}" for r in rows],
         "売却時純利益(万円)": [f"{r['net_profit_if_sell']:,.0f}" for r in rows],
     }
-    st.table(table)
     m1, m2 = st.columns(2)
     with m1:
         st.metric(f"{label} 累計CF（万円）", f"{proj['cumulative_cf']:,.0f}")
     with m2:
         st.metric(f"{label} 末に売却した場合の純利益（万円）", f"{proj['net_profit_if_sell_end']:,.0f}",
                   help="運営CF累計＋売却純手取り−自己資金（税引前）")
-    st.caption("NOIは横ばい前提（成長0%）。売却時純利益＝累計CF＋売却純手取り−自己資金。すべて税引前の試算。")
+
+    st.markdown("##### 推移グラフ")
+    st.altair_chart(charts.cumulative_cf_chart(proj))
+    st.caption(
+        "🔵累計CF＝運営で手元に残った累計 ／ ⚪ローン残債＝その年の借入残 ／ "
+        "🟠売却時の純利益＝その年に売った場合のトータル（累計CF＋売却純手取り−自己資金）。"
+        "🟠が0を上回る年が『損せず抜けられる』最短ラインです。"
+    )
+    st.altair_chart(charts.annual_cf_chart(proj))
+    st.caption("赤い年はその年のCFが赤字（NOI＜返済）です。初年度は開業立ち上がりを反映しています。")
+
+    with st.expander("📋 数値表で見る"):
+        st.table(table)
+    st.caption("2年目以降のNOIは横ばい前提（成長0%）。売却時純利益＝累計CF＋売却純手取り−自己資金。すべて税引前の試算。")
 
 
 def _render_backward(res, report) -> None:
@@ -1172,6 +1300,14 @@ def _render_backward(res, report) -> None:
 
     # STEP5 最終ジャッジ
     st.markdown("### STEP5 ⚖️ 最終ジャッジ（適正価格 vs 売出価格）")
+    _pos = charts.price_position_chart(res.get("valuation") or {}, b.get("fair_price_man"))
+    if _pos is not None:
+        st.altair_chart(_pos)
+        st.caption(
+            "灰色の帯＝収益価格[A]と原価法[B]から作った相場レンジ。"
+            "🔴売出価格が帯より右なら割高、左なら割安。"
+            "🟢目標NOIから逆算した価格より売出が高い場合、その差が必要な指値額です。"
+        )
     if b["asking_price_man"]:
         j1, j2, j3 = st.columns(3)
         j1.metric("売出価格", f"{b['asking_price_man']:,.0f} 万円")
@@ -1210,6 +1346,7 @@ def render_monetization_tab(report) -> None:
     )
     with sub_back:
         _render_backward(res, report)
+        ui_chat.chat_panel("backward", report, res)
 
     with sub_sum:
         v = res.get("valuation")
@@ -1258,10 +1395,40 @@ def render_monetization_tab(report) -> None:
             f"／営業日:{res['operating_days_used']}日／客室:{res['rooms']}室"
             f"／残存耐用:{res['remaining_useful_life_years']}年／RevPAR:{res.get('revpar_source','—')}／設定:{res['config_version']}"
         )
-        with st.expander("📊 NOI内訳（USALI階層・mid）"):
+        st.divider()
+        st.markdown("### ③ シナリオ比較（弱気・標準・強気）")
+        st.altair_chart(charts.scenario_chart(res))
+        st.caption(
+            "弱気＝低ADR×低稼働×高cap、強気＝高ADR×高稼働×低cap。"
+            "3つが極端に開く場合、前提の不確実性が大きい＝意思決定は弱気側で行うのが安全です。"
+        )
+
+        st.divider()
+        st.markdown("### ④ ADRからNOIまでの導出（どう計算しているか）")
+        st.table(charts.adr_derivation_rows(res))
+        st.caption(
+            "GPIは『満室だったらいくらか』、EGIは『稼働率をかけた実際の収入』です。"
+            "清掃は1泊ごとではなく**1組ごと**に発生する前提で計算しています（平均宿泊日数で割る）。"
+        )
+
+        st.markdown("##### NOIの落ち方")
+        st.altair_chart(charts.noi_waterfall_chart(res["noi_breakdown_mid"]))
+
+        st.divider()
+        st.markdown("### ⑤ 月別の売上と稼働（季節性・開業立ち上がり）")
+        _m = res.get("monthly") or {}
+        if _m.get("stabilized"):
+            st.altair_chart(charts.monthly_chart(_m["stabilized"], _m.get("year1")))
+            st.caption(
+                "🔵安定稼働＝季節係数のみ反映 ／ 🟠初年度＝開業立ち上がりも反映。"
+                f"初年度NOI {res.get('noi_year1_man', 0):,.0f}万円 vs 安定稼働NOI {res['noi']['mid']:,.0f}万円。"
+                "初年度の資金繰りはこの差を見込んでおく必要があります。"
+            )
+
+        with st.expander("📊 NOI内訳（USALI階層・mid）を数値で見る"):
             nb = res["noi_breakdown_mid"]
             st.table({
-                "項目": ["GPI(総収入)", "EGI(実効総収入)", "−変動費", "GOP前", "−固定費", "GOP", "−FF&E積立", "= NOI"],
+                "項目": ["GPI(満室潜在収入)", "EGI(実効総収入)", "−変動費", "GOP前", "−固定費", "GOP", "−FF&E積立", "= NOI"],
                 "万円/年": [nb["gpi"], nb["egi"], nb["variable"], nb["gop_pre"], nb["fixed"], nb["gop"], nb["ffe"], nb["noi"]],
             })
         if res.get("theoretical_max_floor"):
@@ -1276,19 +1443,30 @@ def render_monetization_tab(report) -> None:
         else:
             st.caption("※ 容積ポテンシャルは土地面積の入力で表示されます。")
         st.info(res["disclaimer"])
+        ui_chat.chat_panel("profit", report, res, instance="summary")
 
     with sub5:
         _render_cf_projection(res["projection"]["5y"], "5年")
+        ui_chat.chat_panel("cf", report, res, instance="5y")
     with sub10:
         _render_cf_projection(res["projection"]["10y"], "10年")
+        ui_chat.chat_panel("cf", report, res, instance="10y")
 
     with sub_sens:
-        st.markdown("#### 感度（結論ドライバー）")
-        for t in res["tornado"]:
-            st.markdown(
-                f"**{t['driver']}** — {t['metric']}： {t['low_label']} `{t['low']:,.0f}` ／ "
-                f"基準 `{t['base']:,.0f}` ／ {t['high_label']} `{t['high']:,.0f}`"
+        st.markdown("#### 感度（どの前提が結論を動かすか）")
+        _tor = charts.tornado_chart(res["tornado"])
+        if _tor is not None:
+            st.altair_chart(_tor)
+            st.caption(
+                "棒が長いドライバーほど結論を左右します。"
+                "＝そこを実額で詰める（相場を調べる・見積を取る・金利を確認する）のが最優先です。"
             )
+        with st.expander("📋 数値で見る"):
+            for t in res["tornado"]:
+                st.markdown(
+                    f"**{t['driver']}** — {t['metric']}： {t['low_label']} `{t['low']:,.0f}` ／ "
+                    f"基準 `{t['base']:,.0f}` ／ {t['high_label']} `{t['high']:,.0f}`"
+                )
         st.markdown("#### シナリオ別 投資指標（税引前）")
         fin = res["financing"]
         def _f(v, p=2, suf=""):
@@ -1301,6 +1479,7 @@ def render_monetization_tab(report) -> None:
             "表面利回り": [_f((fin[k]["gross_yield"] or 0)*100, 1, "%") for k in ("min", "mid", "max")],
             "NOI利回り": [_f((fin[k]["noi_yield"] or 0)*100, 1, "%") for k in ("min", "mid", "max")],
         })
+        ui_chat.chat_panel("profit", report, res, instance="sensitivity")
 
 
 # ---------------------------------------------------------------------------
@@ -1339,6 +1518,12 @@ def render_finance_bank_tab(report) -> None:
     cc[3].metric("自己資金回収年", _g(m["payback_years"], 1))
     st.caption("DSCR・返済比率・CF・回収年数はすべて税引前。返済比率の分母は実効総収入(EGI)。")
 
+    st.altair_chart(charts.dscr_gauge_chart(fin))
+    st.caption(
+        "DSCR＝NOI÷年間返済。1.0を切ると返済が家賃収入だけでは回りません。"
+        "銀行は概ね1.2以上を求めます。弱気シナリオでも1.0を超えているかが実務的な安全ラインです。"
+    )
+
     st.markdown("#### 出口・トータルリターン（mid・税引前）")
     e = st.columns(3)
     e[0].metric("売却純手取り(万円)", f"{ex['sale_net_man']:,.0f}",
@@ -1366,6 +1551,7 @@ def render_finance_bank_tab(report) -> None:
         "ここでの提示は一般的傾向に基づく目安であり、確定条件は各金融機関の個別審査で必ずご確認ください。"
         "「融資が付くか（高金利のノンバンク含めれば付きやすい）」と「その金利でCFが回るか」は別問題です。"
     )
+    ui_chat.chat_panel("finance", report, res)
 
 
 # ---------------------------------------------------------------------------
@@ -1394,9 +1580,30 @@ def render_algorithm_page() -> None:
 ```
 土地坪単価（販売価格ベース）とエリア相場の坪単価も並べて、土地としての割安感も確認できます。
 
-### 0.6 Airbnb（民泊）相場の扱い
-近隣Airbnb/民泊の **ADR・稼働率を手動入力** すると RevPAR=ADR×稼働 として収益試算に反映します。
-Airbnbには無料の公式相場APIがないため、自動取得は将来の有料API（AirDNA等）連携で対応予定（スクレイピングは行いません）。
+### 0.6 ADR（1泊単価）と稼働率の決め方 ← v2026.08.1 で強化
+ADRは次の優先順位で決まります。**下に行くほど根拠が弱い**ので、上位の入力があるほど試算の精度が上がります。
+
+| 優先 | 入力 | レンジ(min/max)の作り方 |
+|---|---|---|
+| 1 | RevPAR直接指定 | ±15% |
+| 2 | ADRを手入力（単一値） | ±15%（あくまで仮置き） |
+| 3 | **近隣コンプを数件入力** | **中央値=mid、四分位(25%/75%)=min/max** |
+| 4 | エリア相場（自動） | エリアティアのmin/mid/max |
+
+**近隣コンプ**は「⚙️前提を調整」の表に、AirDNA等で調べた類似物件のADR・稼働率を数件入れる方式です。
+単一値の±15%より実勢の分布に近いレンジになります。データ取得元は差し替え可能な設計（`core/market_data.py`）で、
+将来AirDNA等の正規APIに載せ替えても計算側は変更不要です。Airbnb本体のスクレイピングは規約違反のため行いません。
+
+**一棟貸しのADR**は定員に対して**逓減**させます（10人だから10倍にはならない）。
+```
+一棟ADR = 1人あたり単価 × 定員^0.85     （定員は実務上限16名でクランプ）
+```
+
+### 0.65 季節性と開業立ち上がり ← v2026.08.1 で追加
+月別の季節係数（年平均1.0に正規化）と、開業からの立ち上がり（既定：6ヶ月かけて稼働40%→100%）を月次で反映し、
+**初年度NOI**と**安定稼働NOI**を分けて算出します。
+- 物件価値（収益還元）＝**安定稼働NOI**を使う（立ち上がりで資産価値を割り引くのは不適切）
+- 複数年CFの**1年目だけ初年度NOI**を使う（初年度の資金繰りが甘くならないように）
 
 ### 0.7 適正価格の逆算（プロの5ステップ思考）
 「目標NOI利回り（既定15%）を満たすには、いくらまで払っていいか」を逆算します。
@@ -1414,17 +1621,31 @@ NOIは精緻版（USALI）と簡易版（売上×50%）の両方を表示し、�
 運営費を「率1本」で引かず、ホテル会計（USALI）の費目で積み上げます。
 
 ```
-GPI（総収入） = RevPAR × 客室数 × 営業日数
+GPI（満室時潜在収入） = ADR × 収益計算室数 × 営業日数
               （客室数 = 延床 × 客室占有率 ÷ 1室面積。1室面積は法令下限でクランプ）
+              （一棟貸しは室数=1／客室ごとは室数=客室数）
               （業態が民泊なら営業日数は最大180日）
-EGI（実効総収入） = GPI ×（1 − 空室・貸倒控除）
- − 変動費：OTA手数料・清掃/泊・リネン・水光熱変動
+客室収入 = GPI × 稼働率            （= RevPAR × 室数 × 営業日数）
+清掃料金収入 = 1組あたり請求額 × 清掃組数
+EGI（実効総収入） = 客室収入 ＋ 清掃料金収入
+ − 変動費：OTA手数料・清掃原価×組数・リネン・水光熱変動
  = GOP前
  − 固定費：人件費・運営委託料・損害保険・固定資産税都市計画税・水光熱基本
  = GOP
  − FF&E更新積立（売上の3〜5%）
  = NOI（営業純利益）
+
+清掃組数 = 稼働室夜 ÷ 平均宿泊日数(LOS)
 ```
+
+> **v2026.08.1 での是正（重要）**
+> 1. **GPIの定義を修正**：以前は GPI に RevPAR（＝ADR×稼働）を使ったうえで空室率3%を重ねており、
+>    空室を二重に引いていました。現在は GPI＝満室潜在収入、稼働率は EGI で1回だけ掛けます。
+> 2. **清掃を「1泊ごと」から「1組ごと」へ**：以前は稼働室夜ぶんの清掃費が発生する計算で、
+>    平均3泊なら清掃費が約3倍でした。現在は稼働室夜÷LOSの「組数」で計上します。
+>    あわせて1組あたりの単価を実勢（一棟12,000円／客室4,000円）に補正しています。
+> 3. **清掃料金収入を計上可能に**：既定は0（＝ADRに清掃費が含まれている保守側の想定）。
+>    ADRとは別にゲスト請求している場合のみ入力してください（二重計上防止）。
 
 ### 2. 物件価値
 **[A] 収益価格（Inwood有期還元）** … 残存耐用年数nで割り戻します（永続還元は使いません）。
