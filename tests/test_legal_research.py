@@ -201,20 +201,32 @@ def test_cache_roundtrip(tmp_suffix="__pytest_tmp"):
         lr._save_cache(original)
 
 
-def test_missing_api_key_degrades_gracefully():
+def test_missing_credentials_degrades_gracefully():
+    """資格情報が無いとき、SDKの生エラーではなく人が読める説明を返す.
+
+    SDK は認証の解決を送信時まで遅らせるので、クライアントを構築できたことを
+    「使える」と誤判定しないこともここで固定する。
+    """
     import os
 
-    saved = os.environ.pop("ANTHROPIC_API_KEY", None)
+    saved = {
+        k: os.environ.pop(k, None)
+        for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+    }
     try:
+        assert lr.is_available() is False, "資格情報が無いのに available になっている"
         r = lr.research_municipality(
             "zzz_no_key", "テスト区", "テスト区1-1-1", refresh=True
         )
-        assert r.error and "ANTHROPIC_API_KEY" in r.error
         assert r.available is False
+        assert "ANTHROPIC_API_KEY" in r.error, r.error
+        # SDK の生メッセージを露出させない
+        assert "Could not resolve authentication" not in r.error, r.error
     finally:
-        if saved:
-            os.environ["ANTHROPIC_API_KEY"] = saved
-    print("✅ APIキーが無くても落ちず、理由を返して法令のみの判定に退避する")
+        for k, v in saved.items():
+            if v:
+                os.environ[k] = v
+    print("✅ 資格情報が無くても落ちず、人が読める説明を返して法令のみの判定に退避する")
 
 
 if __name__ == "__main__":
@@ -227,5 +239,5 @@ if __name__ == "__main__":
     test_web_search_tool_type_by_model()
     test_result_verification_guard()
     test_cache_roundtrip()
-    test_missing_api_key_degrades_gracefully()
+    test_missing_credentials_degrades_gracefully()
     print("\n🎉 自治体調査層テスト 全パス")

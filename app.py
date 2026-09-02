@@ -322,8 +322,10 @@ def render_input_tab() -> None:
         )
         if not legal_research.is_available():
             st.info(
-                "ANTHROPIC_API_KEY が未設定のため自治体調査は使えません。"
-                "全国共通の法令（旅館業法・同施行令・建築基準法）だけで判定します。"
+                "Anthropic API の資格情報が見つからないため自治体調査は使えません。"
+                "`.env` または Streamlit Secrets に ANTHROPIC_API_KEY を設定してください。"
+                "未設定でも、全国共通の法令（旅館業法・同施行令・建築基準法）に基づく"
+                "許可可否の判定は動きます。"
             )
         research_refresh = st.checkbox(
             "キャッシュを無視して再調査する（条例改正の反映）",

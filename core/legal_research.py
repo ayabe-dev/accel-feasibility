@@ -382,9 +382,50 @@ def cached_result(
     return ResearchResult(**{**entry, "from_cache": True})
 
 
+def _build_client() -> Any:
+    """Anthropic クライアントを作る.
+
+    ANTHROPIC_API_KEY が無いことは「資格情報が無い」ことを意味しない。
+    SDK は ANTHROPIC_API_KEY → ANTHROPIC_AUTH_TOKEN → `ant auth login` の
+    プロファイル → Workload Identity Federation の順に解決するため、
+    引数なしで構築して SDK に任せる。解決できないときだけ例外が飛ぶ。
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if api_key:
+        return anthropic.Anthropic(api_key=api_key)
+    return anthropic.Anthropic()
+
+
+# 資格情報を解決できなかったときの、人が読める説明
+_NO_CREDENTIAL_MESSAGE = (
+    "Anthropic API の資格情報が見つからないため自治体調査をスキップしました。"
+    "ANTHROPIC_API_KEY（または ANTHROPIC_AUTH_TOKEN）を設定してください。"
+    "Streamlit Cloud では Secrets に登録します。"
+    "全国共通の法令（旅館業法・同施行令・建築基準法）に基づく判定のみ表示しています。"
+)
+
+
+def _has_credentials() -> bool:
+    """資格情報が解決できるか.
+
+    SDK は認証の解決を「送信時」まで遅延するため、クライアントを構築できた
+    ことは資格情報がある証拠にならない。構築後のクライアントが実際に
+    api_key / auth_token を保持しているかまで見る。
+    """
+    if os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"):
+        return True
+    try:
+        client = _build_client()
+    except Exception:
+        return False
+    return bool(
+        getattr(client, "api_key", None) or getattr(client, "auth_token", None)
+    )
+
+
 def is_available() -> bool:
-    """調査層が使える状態か（SDKとAPIキー）."""
-    return _ANTHROPIC_AVAILABLE and bool(os.getenv("ANTHROPIC_API_KEY"))
+    """調査層が使える状態か（SDK＋資格情報）."""
+    return _ANTHROPIC_AVAILABLE and _has_credentials()
 
 
 # ---------------------------------------------------------------------------
@@ -416,19 +457,22 @@ def research_municipality(
             municipality_name=municipality_name,
             error="anthropic パッケージが未インストールのため自治体調査をスキップしました。",
         )
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not _has_credentials():
         return ResearchResult(
             municipality_key=municipality_key,
             municipality_name=municipality_name,
-            error=(
-                "ANTHROPIC_API_KEY が未設定のため自治体調査をスキップしました。"
-                "全国共通の法令に基づく判定のみ表示しています。"
-            ),
+            error=_NO_CREDENTIAL_MESSAGE,
         )
 
     model = os.getenv("LEGAL_RESEARCH_MODEL", DEFAULT_MODEL)
-    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        client = _build_client()
+    except Exception as e:
+        return ResearchResult(
+            municipality_key=municipality_key,
+            municipality_name=municipality_name,
+            error=f"{_NO_CREDENTIAL_MESSAGE}（詳細：{e}）",
+        )
 
     biz_label = {
         BusinessType.HOTEL_RYOKAN: "旅館・ホテル営業",
@@ -459,10 +503,15 @@ web検索で自治体の例規集・審査基準・手引きを実際に開い�
         raw = _run_research(client, model, tools, user_prompt)
     except Exception as e:  # pragma: no cover - API 依存
         logger.warning("自治体調査に失敗: %s", e)
+        msg = str(e)
+        if "authentication" in msg.lower() or "api_key" in msg.lower():
+            err = _NO_CREDENTIAL_MESSAGE
+        else:
+            err = f"自治体調査でエラーが発生しました：{e}"
         return ResearchResult(
             municipality_key=municipality_key,
             municipality_name=municipality_name,
-            error=f"自治体調査でエラーが発生しました：{e}",
+            error=err,
         )
 
     if raw is None:

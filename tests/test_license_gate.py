@@ -406,6 +406,76 @@ def test_judgment_confidence_and_completeness():
     )
 
 
+# ---------------------------------------------------------------------------
+# 出力との統合（スコア・レポート）
+# ---------------------------------------------------------------------------
+
+
+def test_score_is_blocked_when_license_is_blocked():
+    """許可が下りない物件で、スコアだけ良く見えることがあってはいけない."""
+    from core import judgment
+    from core.scoring import compute_score
+
+    p = ProjectInput(
+        address="東京都目黒区青葉台2-1-1",  # 一種低層
+        business_type=BusinessType.HOTEL_RYOKAN,
+        floor_area_m2=92.54,
+        floors_above=3,
+        structure="木造",
+        has_inspection_certificate=True,
+    )
+    r = judgment.run(project=p, docs=[])
+    assert r.license_judgment.verdict == LicenseVerdict.BLOCKED
+    score = compute_score(r)
+    assert score.blocked is True, "許可が下りないのにスコアが出ている"
+    print("✅ 許可BLOCKEDならスコアもブロックされる（判定とスコアが矛盾しない）")
+
+
+def test_license_verdict_is_scored_as_an_item():
+    from core import judgment
+    from core.scoring import compute_score
+
+    p = ProjectInput(
+        address="東京都目黒区下目黒1-1-1",  # 商業
+        business_type=BusinessType.HOTEL_RYOKAN,
+        floor_area_m2=150.0,
+        floors_above=2,
+        structure="RC造",
+        has_inspection_certificate=True,
+    )
+    r = judgment.run(project=p, docs=[])
+    score = compute_score(r)
+    assert not score.blocked
+    item = next((i for i in score.items if i.key == "license_verdict"), None)
+    assert item is not None, "スコアに許可判定の項目がない"
+    assert item.weight >= 10.0, "許可判定は主判定なので最大重みであるべき"
+    print(f"✅ 許可判定がスコア項目に入る（{item.score:.0f}点 × 重み{item.weight}）")
+
+
+def test_reports_carry_the_license_section():
+    """Markdown / HTML の両方に許可判定が載る（PDF出力はHTML経由）."""
+    from core import judgment
+    from core.report_generator import generate_markdown_report
+    from core.report_html import generate_html_report
+
+    p = ProjectInput(
+        address="東京都目黒区中目黒1-1-1",
+        business_type=BusinessType.HOTEL_RYOKAN,
+        floor_area_m2=92.54,
+        floors_above=3,
+        structure="木造",
+        has_inspection_certificate=True,
+    )
+    r = judgment.run(project=p, docs=[])
+    md = generate_markdown_report(r)
+    html = generate_html_report(r)
+    for doc, name in ((md, "Markdown"), (html, "HTML")):
+        assert "旅館業許可の可否" in doc, f"{name}に許可判定がない"
+        assert "許可までに越えるゲート" in doc, f"{name}にゲート一覧がない"
+        assert "e-Gov" in doc, f"{name}に一次情報の出典がない"
+    print("✅ Markdown・HTML の両方に許可判定と一次情報の出典が載る")
+
+
 if __name__ == "__main__":
     test_law27_relaxation_applies_to_small_3story()
     test_law27_still_fails_when_over_200m2()
@@ -428,4 +498,7 @@ if __name__ == "__main__":
     test_primary_sources_are_self_consistent()
     test_every_blocking_gate_has_evidence()
     test_judgment_confidence_and_completeness()
+    test_score_is_blocked_when_license_is_blocked()
+    test_license_verdict_is_scored_as_an_item()
+    test_reports_carry_the_license_section()
     print("\n🎉 許可判定テスト 全パス")
