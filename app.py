@@ -48,7 +48,7 @@ import ui_chat
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="用途変更フィジビリティ判定 — Phase 1 MVP",
+    page_title="旅館業許可フィジビリティ判定",
     page_icon="🏨",
     layout="wide",
 )
@@ -141,10 +141,11 @@ def render_sidebar() -> None:
 def main() -> None:
     render_sidebar()
 
-    st.title("🏨 用途変更フィジビリティ判定 — Phase 1 MVP")
+    st.title("🏨 旅館業許可フィジビリティ判定")
     st.caption(
-        "住宅 → 旅館・ホテル営業 の **一次スクリーニング**。"
-        "立地の可否・概算費用・期間・不足書類・TODO を即時提示します。"
+        "**この物件で旅館業の許可が取れるか**を、法令の原文を根拠に一次スクリーニング。"
+        "許可までのゲート・概算費用・期間・不足書類・TODO を即時提示し、"
+        "許可が難しい場合は簡易宿所・民泊の別ルートも評価します。"
     )
 
     # トップは2軸（①旅館業が取れるか ②収益化できるか）＋ 財務・銀行 / 計算ロジック / ルール
@@ -807,10 +808,38 @@ def render_report(report) -> None:
         JudgmentLevel.CONDITIONAL: "条件付き可能",
         JudgmentLevel.NO_GO: "立地不可（NO-GO）",
     }
-    st.subheader(
-        f"{level_color[report.overall_level]} 総合判定：{level_label[report.overall_level]}"
-    )
-    st.info(report.overall_summary)
+
+    # 主判定は「許可が取れるか」。旧・総合判定（用途変更の重さ）は補助として畳んでおく。
+    # 2つの見出しを並べると、どちらが結論なのか読み手が迷うため。
+    _lic = getattr(report, "license_judgment", None)
+    if _lic is not None:
+        _banner = {
+            LicenseVerdict.GRANTABLE: st.success,
+            LicenseVerdict.CONDITIONAL: st.info,
+            LicenseVerdict.CONSULT: st.warning,
+            LicenseVerdict.DIFFICULT: st.warning,
+            LicenseVerdict.BLOCKED: st.error,
+            LicenseVerdict.UNKNOWN: st.info,
+        }.get(_lic.verdict, st.info)
+        st.subheader(f"{_lic.verdict_label}")
+        _banner(_lic.headline)
+        st.caption(
+            "詳細と根拠は下の「🛂 許可可否」タブへ。"
+            f"（対象業態：{_lic.business_label}／情報の充足率 "
+            f"{_lic.data_completeness * 100:.0f}%／信頼度 {_lic.confidence}）"
+        )
+        with st.expander(
+            f"参考：用途変更の重さの判定（{level_color[report.overall_level]} "
+            f"{level_label[report.overall_level]}）",
+            expanded=False,
+        ):
+            st.info(report.overall_summary)
+    else:
+        st.subheader(
+            f"{level_color[report.overall_level]} 総合判定："
+            f"{level_label[report.overall_level]}"
+        )
+        st.info(report.overall_summary)
 
     # 追加情報による補正コメント
     if report.context_impact is not None:
