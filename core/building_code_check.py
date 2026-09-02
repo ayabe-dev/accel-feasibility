@@ -70,13 +70,36 @@ def _check_law_27(project: ProjectInput) -> BuildingCodeCheckItem:
                 recommended_action="現況の耐火性能を竣工図書で再確認",
                 impact="high",
             )
+        # 平成30年改正（令和元年6月25日施行）：階数3・延べ面積200㎡未満の
+        # 就寝利用建築物は、警報設備の設置により耐火建築物等としなくてよい。
+        # ここを見落とすと、小規模な木造3階建てに不要な耐火改修費を積んでしまう。
+        if floors_above == 3 and 0 < floor_area < 200:
+            return BuildingCodeCheckItem(
+                rule_id="law_27",
+                rule_name="法27条：特殊建築物の耐火要件",
+                article="建築基準法27条1項ただし書（令和元年6月25日施行の緩和）",
+                status=CheckStatus.NEEDS_REVIEW,
+                requirement=(
+                    "3階建かつ延べ面積200㎡未満の就寝利用建築物は、"
+                    "警報設備の設置により耐火建築物等としなくてよい"
+                ),
+                current=(
+                    f"3階建 / 延床{floor_area:,.0f}㎡（200㎡未満） / "
+                    f"構造：{structure or '不明'} → 緩和の適用可能性あり"
+                ),
+                recommended_action=(
+                    "告示仕様の警報設備で緩和が適用できるか、一級建築士・特定行政庁に確認。"
+                    "適用できれば耐火被覆・減築は不要になる"
+                ),
+                impact="medium",
+            )
         return BuildingCodeCheckItem(
             rule_id="law_27",
             rule_name="法27条：特殊建築物の耐火要件",
             article="建築基準法27条",
             status=CheckStatus.NON_COMPLIANT,
-            requirement="3階以上の旅館は耐火建築物等が必要",
-            current=f"{floors_above}階建 / 構造：{structure or '不明'}（非耐火）",
+            requirement="3階以上の旅館は耐火建築物等が必要（延べ200㎡未満の緩和は規模から適用外）",
+            current=f"{floors_above}階建 / 延床{floor_area:,.0f}㎡ / 構造：{structure or '不明'}（非耐火）",
             recommended_action="耐火被覆/耐火構造への補強、または規模見直し（3階以下の旅館部分に減築）",
             impact="high",
             options=_options_for_law_27_non_compliant(project),

@@ -181,12 +181,31 @@ def test_simple_lodging_does_not_crash():
     print("✅ 簡易宿所で判定が通る（定員1.5㎡/人が適用）")
 
 
-def test_minpaku_is_out_of_scope_not_crash():
-    """民泊は建基法上「住宅」なので対象外と明示して返す（旧実装はKeyErrorで落ちた）."""
+def test_minpaku_is_not_restricted_by_zoning():
+    """民泊は建基法上「住宅」なので用途地域の制限を受けない（＝GO）.
+
+    旧実装は KeyError で落ち、その後「本判定の対象外」として CONDITIONAL を
+    返していた。しかし住宅宿泊事業は用途地域にかかわらず実施できるのが原則で、
+    可否を決めるのは住宅宿泊事業法18条の条例なので、そう判定するのが正しい。
+    """
     r = _run(bt=BusinessType.MINPAKU, fa=90.0)
-    assert r.zoning.level == JudgmentLevel.CONDITIONAL
-    assert "住宅" in r.zoning.reason and "対象外" in r.zoning.reason, r.zoning.reason
-    print("✅ 民泊は対象外として説明を返す（クラッシュしない）")
+    assert r.zoning.level == JudgmentLevel.GO, r.zoning.reason
+    assert "住宅宿泊事業" in r.zoning.reason, r.zoning.reason
+    assert "18条" in r.zoning.reason, r.zoning.reason
+    print("✅ 民泊は用途地域で制限されない（条例が可否を決めると明示）")
+
+
+def test_minpaku_allowed_in_low_rise_residential():
+    """旅館業がNGの第一種低層住居専用地域でも、民泊は用途地域では落ちない."""
+    hotel = _run(address="東京都目黒区八雲1-1-1", bt=BusinessType.HOTEL_RYOKAN, fa=90.0)
+    minpaku = _run(address="東京都目黒区八雲1-1-1", bt=BusinessType.MINPAKU, fa=90.0)
+    # 八雲は一種低層とは限らないので、用途地域が一種低層のときだけ意味のある比較になる
+    if hotel.geo.zoning_code == "first_low_residential":
+        assert hotel.zoning.level == JudgmentLevel.NO_GO
+        assert minpaku.zoning.level == JudgmentLevel.GO
+        print("✅ 一種低層で 旅館業=NO_GO / 民泊=GO に分岐する")
+    else:
+        print("⏭️ 一種低層のサンプル住所が取れないためスキップ")
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +266,8 @@ if __name__ == "__main__":
     test_todos_include_meguro_contacts()
     test_zoning_outcomes_for_meguro_demo_addresses()
     test_simple_lodging_does_not_crash()
-    test_minpaku_is_out_of_scope_not_crash()
+    test_minpaku_is_not_restricted_by_zoning()
+    test_minpaku_allowed_in_low_rise_residential()
     test_capacity_uses_ordinance_and_never_exceeds_it()
     test_generic_municipality_has_no_legal_cap()
     test_reports_contain_meguro_content()

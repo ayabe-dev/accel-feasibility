@@ -23,7 +23,10 @@ except Exception:
     pass
 
 from core import judgment
+from core import legal_research
 from core import profitability
+from core.license_gate import GateStatus, LicenseVerdict
+from core.municipality import detect_municipality, get_municipality_name
 from core.document_parser import from_streamlit_uploaded_file, parse_document
 from core.models import (
     BusinessType,
@@ -215,13 +218,21 @@ def render_input_tab() -> None:
     with col2:
         business_type = st.selectbox(
             "業態",
-            options=[BusinessType.HOTEL_RYOKAN, BusinessType.SIMPLE_LODGING],
+            options=[
+                BusinessType.HOTEL_RYOKAN,
+                BusinessType.SIMPLE_LODGING,
+                BusinessType.MINPAKU,
+            ],
             format_func=lambda x: {
-                BusinessType.HOTEL_RYOKAN: "旅館・ホテル営業",
-                BusinessType.SIMPLE_LODGING: "簡易宿所営業",
+                BusinessType.HOTEL_RYOKAN: "旅館・ホテル営業（旅館業許可）",
+                BusinessType.SIMPLE_LODGING: "簡易宿所営業（旅館業許可）",
+                BusinessType.MINPAKU: "住宅宿泊事業（民泊・届出）",
             }[x],
-            help="建築基準法上はどちらも「旅館・ホテル」用途。旅館業法の客室基準と"
-                 "定員基準（目黒区：旅館ホテル3㎡/人・簡易宿所1.5㎡/人）が異なります",
+            help="旅館業の2業態は建築基準法上どちらも「ホテル又は旅館」用途で、"
+                 "立地・耐火・避難の要件は同じ。違うのは旅館業法の構造設備基準"
+                 "（簡易宿所は1室単位の面積下限がなく客室延床33㎡以上）。"
+                 "民泊は建基法上「住宅」のままなので用途地域の制限を受けない代わりに、"
+                 "年180日上限と自治体条例の区域・期間制限がかかります。",
         )
 
     with st.expander("既知の情報があれば入力（任意）", expanded=False):
@@ -264,6 +275,61 @@ def render_input_tab() -> None:
                 options=["不明", "あり", "なし"],
                 index=0,
             )
+
+    # ── 許可判定に効く計画情報 ─────────────────────────
+    with st.expander("🛂 許可判定に効く計画情報（任意・入れると判定が確定します）", expanded=False):
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            conversion_area = st.number_input(
+                "用途変更部分の床面積（㎡）",
+                min_value=0.0,
+                value=0.0,
+                step=10.0,
+                help="建物の一部だけを宿泊用途にする場合に入力（例：1階は住居のまま残す）。"
+                     "建基法87条の200㎡判定はこの面積で行います。"
+                     "未入力なら延床面積で判定します。",
+            )
+        with p2:
+            guest_room_count = st.number_input(
+                "計画する客室数",
+                min_value=0,
+                max_value=200,
+                value=0,
+                step=1,
+                help="旅館・ホテル営業の客室面積基準（1室7㎡・寝台9㎡以上）の目安計算に使います。",
+            )
+        with p3:
+            owner_resident_choice = st.selectbox(
+                "家主居住の予定（民泊ルート）",
+                options=["未定", "家主居住型", "家主不在型"],
+                index=0,
+                help="民泊では『宿泊室50㎡以下かつ家主が不在とならない』場合に"
+                     "非常用照明の設置が免除され、初期投資が大きく変わります。",
+            )
+
+    # ── 自治体条例の調査（LLM） ─────────────────────────
+    with st.expander("🔍 自治体の条例・手引きを一次情報から調べる", expanded=False):
+        st.caption(
+            "許可の可否を実際に左右するのは自治体の上乗せ条例です。"
+            "Claude が web 検索で自治体の例規集・審査基準・手引きを実際に開いて確認し、"
+            "**原文の引用と出典URLが取れたものだけ**を判定に使います。"
+            "調査結果はキャッシュされ、次回以降は即座に反映されます。"
+        )
+        research_enabled = st.checkbox(
+            "自治体条例を調査する（1〜3分かかります）",
+            value=False,
+            disabled=not legal_research.is_available(),
+        )
+        if not legal_research.is_available():
+            st.info(
+                "ANTHROPIC_API_KEY が未設定のため自治体調査は使えません。"
+                "全国共通の法令（旅館業法・同施行令・建築基準法）だけで判定します。"
+            )
+        research_refresh = st.checkbox(
+            "キャッシュを無視して再調査する（条例改正の反映）",
+            value=False,
+            disabled=not research_enabled,
+        )
 
     # 用途地域・防火地域はREINFOLIB API or 書類OCRから自動取得するため手動入力UIは廃止
     manual_zoning = "自動取得"
@@ -395,6 +461,16 @@ def render_input_tab() -> None:
                 has_inspection_certificate=_yesno(has_inspection),
                 renovation_history=_yesno(renovation),
                 additional_context=additional_context if additional_context else None,
+                conversion_area_m2=(
+                    float(conversion_area) if conversion_area > 0 else None
+                ),
+                guest_room_count=(
+                    int(guest_room_count) if guest_room_count > 0 else None
+                ),
+                owner_resident={
+                    "家主居住型": True,
+                    "家主不在型": False,
+                }.get(owner_resident_choice),
             )
 
             # 書類解析
@@ -435,6 +511,31 @@ def render_input_tab() -> None:
                 s.strip() for s in nearby_facilities_text.split(",") if s.strip()
             ]
 
+            # 自治体条例の調査（任意）。判定より先に済ませて判定に食わせる
+            research = None
+            muni_key = detect_municipality(project.address)
+            if research_enabled and muni_key:
+                with st.spinner(
+                    f"{get_municipality_name(muni_key) or muni_key} の条例・手引きを"
+                    "一次情報から調査中…（web検索）"
+                ):
+                    research = legal_research.research_municipality(
+                        municipality_key=muni_key,
+                        municipality_name=get_municipality_name(muni_key) or muni_key,
+                        address=project.address,
+                        business_type=project.business_type,
+                        refresh=research_refresh,
+                    )
+            elif research_enabled and not muni_key:
+                st.warning(
+                    "住所から自治体を特定できなかったため、条例調査をスキップしました。"
+                )
+            elif muni_key:
+                # 調査を明示的に走らせていなくても、既存キャッシュがあれば使う
+                research = legal_research.cached_result(
+                    muni_key, project.business_type
+                )
+
             # 総合判定
             report = judgment.run(
                 project=project,
@@ -442,6 +543,7 @@ def render_input_tab() -> None:
                 manual_geo=manual_geo,
                 has_nearby_facility=_yesno(nearby_choice),
                 nearby_facilities=nearby_facilities,
+                research=research,
             )
 
         # Session State に保存して評価タブで表示
@@ -535,6 +637,119 @@ def _fill_report_downloads(report) -> None:
                 "💡 PDFを直接生成するには `pip install weasyprint` が必要です。"
                 "未インストールの場合は HTML をダウンロード→ブラウザで開く→ Cmd+P で PDF保存できます。"
             )
+
+
+def render_license_tab(report) -> None:
+    """🛂 許可可否タブ：この物件で旅館業の許可が取れるかを主判定として出す."""
+    j = getattr(report, "license_judgment", None)
+    if j is None:
+        st.info("許可可否の判定結果がありません。入力タブから再判定してください。")
+        return
+
+    # ── 結論 ──────────────────────────────────────────
+    banner = {
+        LicenseVerdict.GRANTABLE: st.success,
+        LicenseVerdict.CONDITIONAL: st.info,
+        LicenseVerdict.CONSULT: st.warning,
+        LicenseVerdict.DIFFICULT: st.warning,
+        LicenseVerdict.BLOCKED: st.error,
+        LicenseVerdict.UNKNOWN: st.info,
+    }.get(j.verdict, st.info)
+    banner(f"### {j.verdict_label}\n\n{j.headline}")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("対象業態", j.business_label.split("（")[0])
+    c2.metric("自治体", j.municipality_name or "未特定")
+    c3.metric("情報の充足率", f"{j.data_completeness * 100:.0f}%")
+    c4.metric("判定の信頼度", j.confidence)
+
+    if j.permit_authority:
+        st.caption(f"**許可権者・窓口**：{j.permit_authority}")
+    st.caption(j.disclaimer)
+
+    # ── 次にやること ───────────────────────────────────
+    if j.next_actions:
+        st.markdown("#### ✅ 次にやること")
+        for i, a in enumerate(j.next_actions, 1):
+            st.markdown(f"{i}. {a}")
+
+    # ── 自治体調査の状態 ───────────────────────────────
+    if j.research_note:
+        st.warning(f"🔍 {j.research_note}")
+    elif j.research_summary:
+        with st.expander(
+            f"🔍 {j.municipality_name} の条例調査結果（{j.researched_on} 時点）",
+            expanded=False,
+        ):
+            st.markdown(j.research_summary)
+            if j.unresolved:
+                st.markdown("**確認できなかった論点（保健所へ直接確認）**")
+                for u in j.unresolved:
+                    st.markdown(f"- {u}")
+
+    st.divider()
+
+    # ── ゲート ────────────────────────────────────────
+    st.markdown("#### 🚪 許可までに越えるゲート")
+    st.caption(
+        "旅館業法3条の不許可事由を起点に、許可までに越える必要がある要件を並べています。"
+        "根拠は法令の原文と出典URLつきで表示します。"
+        "⚠️未検証の根拠は判定には使っていません。"
+    )
+
+    order = ["立地", "建物", "構造設備", "事業条件", "申請者"]
+    by_cat = {}
+    for g in j.gates:
+        by_cat.setdefault(g.category, []).append(g)
+
+    for cat in order:
+        gates = by_cat.get(cat)
+        if not gates:
+            continue
+        st.markdown(f"##### {cat}")
+        for g in gates:
+            expanded = g.status in (
+                GateStatus.FAIL,
+                GateStatus.CONSULT,
+                GateStatus.UNKNOWN,
+            )
+            with st.expander(f"{g.status_label}　{g.title}", expanded=expanded):
+                st.markdown(g.finding)
+                if g.remedy:
+                    st.markdown(f"**対応**：{g.remedy}")
+                if g.data_gaps:
+                    st.markdown("**確定に必要な情報**")
+                    for gap in g.data_gaps:
+                        st.markdown(f"- {gap}")
+                if g.evidences:
+                    st.markdown(f"**根拠**（この項目の根拠信頼度：{g.confidence}）")
+                    for e in g.evidences:
+                        st.markdown(e.to_markdown())
+                        st.markdown("")
+
+    # ── 別ルート ──────────────────────────────────────
+    if j.alternatives:
+        st.divider()
+        st.markdown("#### 🔀 別ルートの見込み")
+        st.caption(
+            "主判定でつまずいた場合に、業態を変えれば成立するかを同じ物件条件で評価します。"
+        )
+        for alt in j.alternatives:
+            with st.expander(f"{alt.verdict_label}　{alt.label}", expanded=True):
+                st.markdown(alt.summary)
+                if alt.blockers:
+                    st.markdown("**越えられない要因**")
+                    for b in alt.blockers:
+                        st.markdown(f"- ⛔ {b}")
+                if alt.conditions:
+                    st.markdown("**条件**")
+                    for cnd in alt.conditions:
+                        st.markdown(f"- {cnd}")
+                if alt.evidences:
+                    with st.expander("根拠を見る", expanded=False):
+                        for e in alt.evidences:
+                            st.markdown(e.to_markdown())
+                            st.markdown("")
 
 
 def render_report(report) -> None:
@@ -645,8 +860,10 @@ def render_report(report) -> None:
             st.metric("総合スコア", f"{score.total:.1f} / 100", delta=f"Grade {score.grade}")
 
     # 詳細タブ
-    tab_score, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+    (tab_license, tab_score, tab1, tab2, tab3, tab4, tab5, tab6, tab7,
+     tab8) = st.tabs(
         [
+            "🛂 許可可否",
             "🎯 スコア",
             "📍 立地",
             "🏗️ パターン判定",
@@ -658,6 +875,9 @@ def render_report(report) -> None:
             "📄 抽出書類",
         ]
     )
+
+    with tab_license:
+        render_license_tab(report)
 
     with tab_score:
         if score.blocked:
