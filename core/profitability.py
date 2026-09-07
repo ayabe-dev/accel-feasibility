@@ -680,6 +680,9 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     else:
         est_low, est_mid, est_high = a_min, a_mid, a_max
     asking = o.get("purchase_price_man")
+    # ⚠️ 上の「良物件判定」の verdict を潰さないよう別名にする
+    # （潰すと戻り値の "verdict" が価格の割安判定に化け、DSCR/CFの判定が消える）
+    price_verdict = None
     valuation = {
         "market_value_man": {"min": round(est_low, 1), "mid": round(est_mid, 1), "max": round(est_high, 1)},
         "income_value_mid_man": round(a_mid, 1),
@@ -692,12 +695,12 @@ def compute(report: FeasibilityReport, overrides: Optional[Dict[str, Any]] = Non
     if asking:
         gap = asking / est_mid - 1 if est_mid > 0 else None
         if asking < est_low:
-            verdict = "割安（相場下限より安い）"
+            price_verdict = "割安（相場下限より安い）"
         elif asking > est_high:
-            verdict = "割高（相場上限より高い）"
+            price_verdict = "割高（相場上限より高い）"
         else:
-            verdict = "適正レンジ内"
-        valuation["price_verdict"] = verdict
+            price_verdict = "適正レンジ内"
+        valuation["price_verdict"] = price_verdict
         valuation["gap_pct"] = round(gap * 100, 1) if gap is not None else None
         if land_area:
             valuation["asking_land_per_tsubo_man"] = round(asking / m2_to_tsubo(land_area), 1)

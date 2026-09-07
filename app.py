@@ -35,8 +35,17 @@ from core.models import (
     JudgmentLevel,
     ProjectInput,
 )
+from core.morning_brief import (
+    generate_morning_brief_html,
+    generate_morning_brief_markdown,
+    generate_morning_brief_pdf,
+    one_line_summary,
+    screen,
+    talk_track,
+)
 from core.report_generator import generate_markdown_report
 from core.report_html import generate_html_report, generate_pdf, is_pdf_available
+from core.rulebook import generate_rulebook_html, generate_rulebook_markdown
 from core.scoring import DEFAULT_WEIGHTS, compute_score
 from guide import render_guide_page
 import ui_charts as charts
@@ -149,12 +158,13 @@ def main() -> None:
     )
 
     # トップは2軸（①旅館業が取れるか ②収益化できるか）＋ 財務・銀行 / 計算ロジック / ルール
-    (tab_input, tab_feas, tab_money, tab_finance,
+    (tab_input, tab_feas, tab_money, tab_morning, tab_finance,
      tab_algo, tab_rules) = st.tabs(
         [
             "📥 資料投入",
             "🏨 ①旅館業が取れるか",
             "💹 ②収益化できるか",
+            "🗣️ 朝会1枚",
             "🏦 財務・銀行",
             "📐 収益計算の仕組み",
             "📘 評価ルール詳細",
@@ -185,6 +195,12 @@ def main() -> None:
         else:
             _need_report()
 
+    with tab_morning:
+        if st.session_state.get("report") is not None:
+            render_morning_brief_tab(st.session_state.report)
+        else:
+            _need_report()
+
     with tab_finance:
         if st.session_state.get("report") is not None:
             render_finance_bank_tab(st.session_state.report)
@@ -195,6 +211,7 @@ def main() -> None:
         render_algorithm_page()
 
     with tab_rules:
+        render_rulebook_download()
         render_guide_page()
 
     # 全タブの計算が終わったあとにレポートDLを生成（最新の前提・議論ログを反映）
@@ -640,6 +657,199 @@ def _fill_report_downloads(report) -> None:
                 "💡 PDFを直接生成するには `pip install weasyprint` が必要です。"
                 "未インストールの場合は HTML をダウンロード→ブラウザで開く→ Cmd+P で PDF保存できます。"
             )
+
+
+def render_morning_brief_tab(report) -> None:
+    """🗣️ 朝会1枚タブ：営業がこれ1枚を見て60秒で話せる形にする."""
+    from datetime import datetime as _dt
+
+    st.subheader("🗣️ 朝会1枚（購入検討リストに載せるかを決める）")
+    st.caption(
+        "毎日15分の朝会用。**①相場よりどのぐらい安いか ②用途変更の可否と難易度 ③利回り** の"
+        "3論点だけに絞り、🟢載せる／🟡保留／🔴見送りを出します。"
+        "判定閾値の正本は `config/screening_rules.yaml`（📘評価ルール詳細タブの"
+        "「判定ルールブック」で全量を確認できます）。"
+    )
+
+    # 収益性の前提を反映（②収益化タブで計算済みならそれを使う）
+    if not getattr(report, "profitability", None):
+        cached = st.session_state.get("prof_res")
+        if cached:
+            report.profitability = cached
+        else:
+            try:
+                _get_profit_result(report)
+            except Exception as exc:  # noqa: BLE001
+                st.warning(f"収益性の既定前提での計算に失敗しました：{exc}")
+
+    # ── 誰が何を持ってきたか（1枚の見出しに入る） ──────────────
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        property_name = st.text_input(
+            "物件名", key="mb_name", placeholder="例：高田馬場◯◯ビル"
+        )
+    with c2:
+        source = st.selectbox(
+            "出どころ",
+            ["", "レインズ", "仲介・管理会社の紹介", "DM反響", "訪問営業", "その他"],
+            key="mb_source",
+            help="物件調達4チャネルのどれか。チャネル別のKPIを後で比べるため",
+        )
+    with c3:
+        presenter = st.text_input("説明する人", key="mb_presenter", placeholder="例：高橋")
+
+    memo = st.text_area(
+        "📌 良いと思った理由（朝会の依頼事項②）",
+        key="mb_memo",
+        height=90,
+        placeholder=(
+            "例：同じ通りの◯◯が坪◯万で成約している／オーナーが相続で売り急いでいる／"
+            "隣のビルが民泊で回っている"
+        ),
+        help="ここが空だと数字だけの会になります。持ってきた人の勘を1〜3行で残してください",
+    )
+
+    meta = {
+        "property_name": property_name,
+        "source": source,
+        "presenter": presenter,
+        "memo": memo,
+    }
+
+    # ── 結論 ────────────────────────────────────────────────
+    s = screen(report)
+    banner = {"list_up": st.success, "hold": st.warning, "drop": st.error}.get(
+        s["verdict"], st.info
+    )
+    banner(f"**{s['verdict_label']}**" + ("　🔥激アツ" if s["is_hot"] else ""))
+    for reason in s["reasons"]:
+        st.markdown(f"- {reason}")
+    if s["action"]:
+        st.caption(f"次アクション：{s['action']}")
+
+    price, lic, yld = s["price"], s["license"], s["yield"]
+    m1, m2, m3 = st.columns(3)
+    m1.metric(
+        "①適正レンジmid比",
+        f"{price['gap_pct']:+.1f}%" if price["gap_pct"] is not None else "—",
+        help=price["basis"],
+    )
+    m2.metric("②用途変更", lic["verdict_label"], help=f"調査パターン{lic['pattern']}／{lic['difficulty_label']}")
+    m3.metric(
+        "③NOI利回り（対総投資）",
+        f"{yld['noi_yield_total_pct']:.1f}%" if yld["noi_yield_total_pct"] is not None else "—",
+        help=yld["basis"],
+    )
+
+    if s["missing_inputs"]:
+        st.warning(
+            "**入力が空のため答えられない論点があります**：\n"
+            + "\n".join(f"- {m['label']}（{m.get('why', '')}）" for m in s["missing_inputs"])
+        )
+
+    # ── 1行サマリー・台本 ────────────────────────────────────
+    st.markdown("#### 1行サマリー（Notion物件ページ・アジェンダにそのまま貼る）")
+    st.code(one_line_summary(report, meta), language=None)
+
+    st.markdown("#### ⏱ 60秒の読み上げ台本")
+    for i, line in enumerate(talk_track(report, meta), 1):
+        st.markdown(f"{i}. {line}")
+
+    # ── 出力 ────────────────────────────────────────────────
+    st.divider()
+    md = generate_morning_brief_markdown(report, meta)
+    fname_safe = (
+        (property_name or report.input.address or "brief").replace("/", "_").replace(" ", "_")[:30]
+    )
+    fname_base = f"朝会1枚_{fname_safe}_{_dt.now().strftime('%Y%m%d')}"
+
+    d1, d2, d3 = st.columns(3)
+    with d1:
+        st.download_button(
+            "📝 Markdown",
+            data=md.encode("utf-8"),
+            file_name=f"{fname_base}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    with d2:
+        st.download_button(
+            "🌐 HTML（印刷向け）",
+            data=generate_morning_brief_html(report, meta).encode("utf-8"),
+            file_name=f"{fname_base}.html",
+            mime="text/html",
+            use_container_width=True,
+            help="ブラウザで開いて Cmd+P → A4 1枚で刷って持ち込む",
+        )
+    with d3:
+        pdf = generate_morning_brief_pdf(report, meta)
+        if pdf:
+            st.download_button(
+                "📑 PDF",
+                data=pdf,
+                file_name=f"{fname_base}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        else:
+            st.button(
+                "📑 PDF（要weasyprint）",
+                disabled=True,
+                use_container_width=True,
+                help="未インストール。HTMLをダウンロード→ブラウザで開く→Cmd+PでPDF保存",
+            )
+
+    with st.expander("📄 1枚の中身をここで読む"):
+        st.markdown(md)
+
+
+def render_rulebook_download() -> None:
+    """📖 判定ルールブック：いまシステムが使っているルールの全量を吐き出す."""
+    from datetime import datetime as _dt
+
+    st.subheader("📖 判定ルールブック（現状のルール全量）")
+    st.caption(
+        "**基準をブラッシュアップするための土台**。`config/*.yaml` の全基準、"
+        "旅館業許可12ゲートと引いている法令・条文、調査パターンA〜Dの判定ロジック（コード原文）、"
+        "エリア別ADR・稼働率・cap rate、スコア重み、朝会の判定閾値、"
+        "そして**コードに埋まっていてYAMLで直せない値**までを1ファイルに出します。"
+    )
+
+    try:
+        md = generate_rulebook_markdown()
+        html = generate_rulebook_html()
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"ルールブックの生成に失敗しました：{exc}")
+        st.divider()
+        return
+
+    stamp = _dt.now().strftime("%Y%m%d")
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        st.download_button(
+            "📝 Markdown",
+            data=md.encode("utf-8"),
+            file_name=f"判定ルールブック_{stamp}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    with c2:
+        st.download_button(
+            "🌐 HTML",
+            data=html.encode("utf-8"),
+            file_name=f"判定ルールブック_{stamp}.html",
+            mime="text/html",
+            use_container_width=True,
+        )
+    with c3:
+        st.caption(
+            f"全{len(md):,}文字。CLI でも出せます：`python -m core.rulebook -o ルールブック.md`"
+        )
+
+    with st.expander("📄 ルールブックをここで読む（全文）"):
+        st.markdown(md)
+
+    st.divider()
 
 
 def render_license_tab(report) -> None:

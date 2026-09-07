@@ -15,6 +15,16 @@
    実際に開いて確認し、原文引用と公的ドメインのURLが取れたものだけを判定に使う
 5. 書類アップロード（重説・確認済証・検査済証・登記簿等）からの自動抽出、
    A〜Dの調査パターン判定、概算費用・期間、収益性試算、TODO生成
+6. **朝会1枚の出力**（「🗣️ 朝会1枚」タブ） — 毎日15分の朝会で
+   「購入検討リストに載せるか」を決めるためのA4 1枚。**①相場よりどのぐらい安いか
+   ②用途変更の可否と難易度 ③利回り** の3論点に絞り、**🟢載せる / 🟡保留 / 🔴見送り**を
+   機械判定して、営業がそのまま読める**60秒の台本**と1行サマリーを付ける。
+   判定閾値の正本は `config/screening_rules.yaml`
+7. **判定ルールブックの出力**（「📘 評価ルール詳細」タブ／CLI） — いま使っているルールの
+   全量を1ファイルに吐き出す。基準をブラッシュアップするときの土台
+   ```bash
+   python -m core.rulebook -o 判定ルールブック.md
+   ```
 
 ## 判定ロジックの構成
 
@@ -90,7 +100,9 @@ phase1-mvp/
 ├── config/
 │   ├── zoning_rules.yaml    用途地域 × 業態の可否ルール
 │   ├── distance_rules.yaml  距離規制（学校等100m）
-│   └── cost_estimates.yaml  パターン別の費用・期間レンジ
+│   ├── cost_estimates.yaml  パターン別の費用・期間レンジ
+│   ├── revenue_estimates.yaml 収益の前提（ADR・稼働率・cap rate・経費率・融資）
+│   └── screening_rules.yaml 朝会スクリーニングの判定閾値（載せる/保留/見送り）
 ├── core/
 │   ├── models.py            Pydantic スキーマ
 │   ├── zoning.py            用途地域判定エンジン
@@ -99,7 +111,10 @@ phase1-mvp/
 │   ├── pattern_classifier.py A〜D調査パターン判定
 │   ├── estimator.py         概算費用・期間
 │   ├── todo_generator.py    TODO・追加書類提案
-│   └── judgment.py          総合判定オーケストレータ
+│   ├── judgment.py          総合判定オーケストレータ
+│   ├── morning_brief.py     朝会1枚（3論点＋載せる/保留/見送り＋台本）
+│   ├── rulebook.py          判定ルールブック（現状のルール全量を出力）
+│   └── md_document.py       Markdown → 印刷用HTML / PDF
 ├── api/
 │   └── gis_client.py        不動産情報ライブラリ API クライアント
 └── data/
