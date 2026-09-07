@@ -67,8 +67,23 @@ def judge_zoning(
         )
 
     biz_key = _business_key(project.business_type)
-    biz_rule = area_rule.get(biz_key)
     zoning_name = area_rule.get("name", geo.zoning_name)
+    if biz_key is None:
+        # 住宅宿泊事業（民泊）。建基法上は「住宅」のままなので用途地域の制限は
+        # 原則かからない。可否を決めるのは住宅宿泊事業法18条の条例（区域・期間）。
+        return ZoningJudgment(
+            level=JudgmentLevel.GO,
+            zoning_name=zoning_name,
+            reason=(
+                f"【立地可】{zoning_name}：住宅宿泊事業は住宅を活用する事業のため、"
+                "原則として用途地域にかかわらず実施できます（旅館業と異なり"
+                "第一種低層住居専用地域でも可）。ただし可否を実際に決めるのは"
+                "住宅宿泊事業法18条に基づく自治体条例の区域・期間制限です。"
+                "2026年7月の国の技術的助言により、条例で営業日数を実質ゼロにする"
+                "『ゼロ日規制』が容認されているため、最新の条例確認が必須です。"
+            ),
+        )
+    biz_rule = area_rule.get(biz_key)
 
     if biz_rule is None:
         return ZoningJudgment(
@@ -155,10 +170,20 @@ def judge_zoning(
     )
 
 
-def _business_key(business_type: BusinessType) -> str:
+def _business_key(business_type: BusinessType) -> Optional[str]:
+    """業態 → zoning_rules.yaml の業態キー.
+
+    簡易宿所は建築基準法上「旅館・ホテル」と同じ用途区分なので hotel を使う
+    （目黒区資料でも旅館業法の許可対象として旅館・ホテル営業と簡易宿所営業を並記）。
+    民泊（住宅宿泊事業）は建基法上「住宅」扱いで、用途地域による制限を受けない。
+    zoning_rules.yaml に引くべき業態ルールが存在しないため None を返し、
+    呼び出し側（judge_zoning）が民泊専用の判定文を返す。
+    """
     return {
         BusinessType.HOTEL_RYOKAN: "hotel",
-    }[business_type]
+        BusinessType.SIMPLE_LODGING: "hotel",
+        BusinessType.MINPAKU: None,
+    }.get(business_type)
 
 
 def fire_district_note(geo: GeoLookupResult) -> Optional[str]:

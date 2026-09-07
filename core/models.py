@@ -26,6 +26,24 @@ class ProjectInput(BaseModel):
     address: str = Field(..., description="物件所在地（住居表示または地番）")
     business_type: BusinessType = Field(BusinessType.HOTEL_RYOKAN)
     floor_area_m2: Optional[float] = Field(None, description="延床面積（既知の場合）")
+    conversion_area_m2: Optional[float] = Field(
+        None,
+        description=(
+            "用途変更の対象となる床面積。建物の一部だけを宿泊用途にする場合"
+            "（1階を住居のまま残す等）に入力する。未入力なら延床面積を使う。"
+            "建基法87条の200㎡判定はこの面積で行う"
+        ),
+    )
+    guest_room_count: Optional[int] = Field(
+        None, description="計画する客室数（旅館業法の客室面積基準の判定に使う）"
+    )
+    owner_resident: Optional[bool] = Field(
+        None,
+        description=(
+            "家主居住型か（住宅宿泊事業のルート判定に使う）。"
+            "家主居住かつ宿泊室50㎡以下なら安全措置・消防設備の要求が大きく変わる"
+        ),
+    )
     floors_above: Optional[int] = Field(None, description="地上階数")
     floors_below: Optional[int] = Field(None, description="地下階数")
     structure: Optional[str] = Field(None, description="構造（木造/RC造/S造 等）")
@@ -319,6 +337,9 @@ class ContextImpact(BaseModel):
 class FeasibilityReport(BaseModel):
     """Phase 1 一次スクリーニングの総合レポート."""
 
+    # 旅館業許可の可否判定（core/license_gate.LicenseJudgment）。
+    # models.py が license_gate を import すると循環参照になるため型は緩く持つ。
+    license_judgment: Optional[Any] = None
     input: ProjectInput
     geo: GeoLookupResult
     zoning: ZoningJudgment

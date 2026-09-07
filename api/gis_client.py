@@ -260,12 +260,17 @@ def _fetch_geojson(
     y: int,
     api_key: str,
     timeout: float = 20.0,
+    params: Optional[dict] = None,
 ) -> Optional[dict]:
+    """タイル(z/x/y)のGeoJSONを取る。`params` でAPI固有の引数（year 等）を足せる."""
     try:
+        query = {"response_format": "geojson", "z": z, "x": x, "y": y}
+        if params:
+            query.update(params)
         with httpx.Client(timeout=timeout) as client:
             r = client.get(
                 f"{REINFOLIB_BASE}/{api_path}",
-                params={"response_format": "geojson", "z": z, "x": x, "y": y},
+                params=query,
                 headers={"Ocp-Apim-Subscription-Key": api_key},
             )
             if r.status_code == 404:

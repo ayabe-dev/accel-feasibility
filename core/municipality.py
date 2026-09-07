@@ -38,3 +38,15 @@ def get_municipality_name(key: Optional[str]) -> Optional[str]:
     if not key:
         return None
     return _DATA.get("municipalities", {}).get(key, {}).get("name")
+
+
+def get_municipality_rule(key: Optional[str]) -> dict:
+    """自治体ルールの生dictを返す（無ければ空dict）."""
+    if not key:
+        return {}
+    return _DATA.get("municipalities", {}).get(key, {}) or {}
+
+
+def is_detailed(key: Optional[str]) -> bool:
+    """実データで作り込み済みの自治体か（generic な当て込みではないか）."""
+    return get_municipality_rule(key).get("detail_level") == "full"

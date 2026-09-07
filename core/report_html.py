@@ -399,6 +399,7 @@ def generate_html_report(
     # → 印刷時に各セクション直前で改ページが効く
     raw_sections = [
         _render_header(report, now),
+        _render_license_judgment(report),
         _render_executive_summary(report, score),
         _render_context_impact(report),
         _render_property_overview(report),
@@ -460,6 +461,180 @@ def is_pdf_available() -> bool:
 # ----------------------------------------------------------------------
 # セクションレンダラ
 # ----------------------------------------------------------------------
+
+
+GATE_BADGE = {
+    "pass": ("badge-success", "クリア"),
+    "conditional": ("badge-info", "対応すればクリア"),
+    "consult": ("badge-warning", "事前協議で決まる"),
+    "fail": ("badge-danger", "現状では越えられない"),
+    "unknown": ("badge-neutral", "情報不足"),
+    "not_applicable": ("badge-neutral", "非該当"),
+}
+
+VERDICT_BADGE = {
+    "grantable": ("badge-success", "許可取得の見込みあり"),
+    "conditional": ("badge-info", "条件付きで取得可（改修・申請が前提）"),
+    "consult": ("badge-warning", "自治体協議次第（事前相談が必須）"),
+    "difficult": ("badge-danger", "実質困難（大規模改修・計画変更が前提）"),
+    "blocked": ("badge-danger", "許可は下りない（立地・条例で越えられない）"),
+    "unknown": ("badge-neutral", "情報不足で判定不能"),
+}
+
+
+def _render_evidence(e) -> str:
+    """根拠1件をHTML化。未検証なら明示する."""
+    from core.evidence import TIER_LABEL
+
+    tier = TIER_LABEL.get(e.source_tier, "—")
+    warn = "" if e.verified else " <span class='badge badge-danger'>未検証</span>"
+    parts = [
+        f"<p style='margin:.6em 0 .2em'><strong>{_esc(e.label)}</strong>"
+        f" <span class='badge badge-neutral'>{_esc(tier)}</span>{warn}</p>"
+    ]
+    if e.quote:
+        parts.append(
+            "<blockquote style='margin:.2em 0 .4em 0;padding:.5em .8em;"
+            "border-left:3px solid #cbd5e1;background:#f8fafc;font-size:.92em'>"
+            f"{_esc(e.quote)}</blockquote>"
+        )
+    meta = []
+    if e.publisher:
+        meta.append(_esc(e.publisher))
+    if e.checked_on:
+        meta.append(f"確認日 {_esc(e.checked_on)}")
+    if e.url:
+        meta.append(f"<a href='{_esc(e.url)}'>出典</a>")
+    if meta:
+        parts.append(
+            f"<p style='margin:.1em 0;font-size:.85em;color:#64748b'>"
+            f"{'　'.join(meta)}</p>"
+        )
+    if e.note:
+        parts.append(
+            f"<p style='margin:.1em 0 .6em;font-size:.85em;color:#475569'>"
+            f"<em>{_esc(e.note)}</em></p>"
+        )
+    return "".join(parts)
+
+
+def _render_license_judgment(report: FeasibilityReport) -> str:
+    """旅館業許可の可否（主判定）."""
+    j = getattr(report, "license_judgment", None)
+    if j is None:
+        return ""
+
+    v_cls, v_label = VERDICT_BADGE.get(
+        j.verdict.value, ("badge-neutral", "判定不能")
+    )
+
+    rows = [
+        f"<tr><td>対象業態</td><td>{_esc(j.business_label)}</td></tr>",
+        f"<tr><td>自治体</td><td>{_esc(j.municipality_name or '未特定')}</td></tr>",
+    ]
+    if j.permit_authority:
+        rows.append(
+            f"<tr><td>許可権者・窓口</td><td>{_esc(j.permit_authority)}</td></tr>"
+        )
+    rows.append(
+        f"<tr><td>情報の充足率</td><td>{j.data_completeness * 100:.0f}%</td></tr>"
+    )
+    rows.append(f"<tr><td>判定の信頼度</td><td>{_esc(j.confidence)}</td></tr>")
+    if j.researched_on:
+        rows.append(
+            f"<tr><td>自治体条例の調査日</td><td>{_esc(j.researched_on)}</td></tr>"
+        )
+
+    actions = ""
+    if j.next_actions:
+        items = "".join(f"<li>{_esc(a)}</li>" for a in j.next_actions)
+        actions = f"<h3>0-1. 次にやること</h3><ol>{items}</ol>"
+
+    research = ""
+    if j.research_note:
+        research = (
+            f"<p class='note' style='background:#fef3c7;padding:.7em 1em;"
+            f"border-radius:6px'>⚠️ {_esc(j.research_note)}</p>"
+        )
+    elif j.research_summary:
+        unresolved = ""
+        if j.unresolved:
+            lis = "".join(f"<li>{_esc(u)}</li>" for u in j.unresolved)
+            unresolved = f"<p><strong>確認できなかった論点</strong></p><ul>{lis}</ul>"
+        research = (
+            f"<h3>0-2. 自治体条例の調査結果</h3><p>{_esc(j.research_summary)}</p>"
+            f"{unresolved}"
+        )
+
+    gate_rows = []
+    for g in j.gates:
+        cls, label = GATE_BADGE.get(g.status.value, ("badge-neutral", "—"))
+        gate_rows.append(
+            f"<tr><td>{_esc(g.category)}</td><td>{_esc(g.title)}</td>"
+            f"<td><span class='badge {cls}'>{label}</span></td>"
+            f"<td>{_esc(g.confidence)}</td></tr>"
+        )
+
+    details = []
+    for g in j.gates:
+        cls, label = GATE_BADGE.get(g.status.value, ("badge-neutral", "—"))
+        block = [
+            f"<h4><span class='badge {cls}'>{label}</span> {_esc(g.title)}</h4>",
+            f"<p>{_esc(g.finding)}</p>",
+        ]
+        if g.remedy:
+            block.append(f"<p><strong>対応</strong>：{_esc(g.remedy)}</p>")
+        if g.data_gaps:
+            lis = "".join(f"<li>{_esc(x)}</li>" for x in g.data_gaps)
+            block.append(f"<p><strong>確定に必要な情報</strong></p><ul>{lis}</ul>")
+        if g.evidences:
+            block.append("<p><strong>根拠</strong></p>")
+            block.extend(_render_evidence(e) for e in g.evidences)
+        details.append("".join(block))
+
+    alts = ""
+    if j.alternatives:
+        blocks = []
+        for a in j.alternatives:
+            acls, alabel = VERDICT_BADGE.get(
+                a.verdict.value, ("badge-neutral", "判定不能")
+            )
+            b = [
+                f"<h4><span class='badge {acls}'>{alabel}</span> {_esc(a.label)}</h4>",
+                f"<p>{_esc(a.summary)}</p>",
+            ]
+            if a.blockers:
+                lis = "".join(f"<li>{_esc(x)}</li>" for x in a.blockers)
+                b.append(f"<p><strong>越えられない要因</strong></p><ul>{lis}</ul>")
+            if a.conditions:
+                lis = "".join(f"<li>{_esc(x)}</li>" for x in a.conditions)
+                b.append(f"<p><strong>条件</strong></p><ul>{lis}</ul>")
+            blocks.append("".join(b))
+        alts = "<h3>0-4. 別ルートの見込み</h3>" + "".join(blocks)
+
+    return f"""
+<h2>0. 旅館業許可の可否（主判定）</h2>
+<p style="font-size:1.15em;margin:.4em 0">
+  <span class="badge {v_cls}" style="font-size:1em;padding:.35em .8em">{v_label}</span>
+</p>
+<p>{_esc(j.headline)}</p>
+<table>
+<tr><th>項目</th><th>内容</th></tr>
+{''.join(rows)}
+</table>
+<p class="note">{_esc(j.disclaimer)}</p>
+{actions}
+{research}
+<h3>0-3. 許可までに越えるゲート</h3>
+<p>旅館業法3条の不許可事由を起点に、許可までに越える必要がある要件を並べています。
+「未検証」と記した根拠は判定には使用していません。</p>
+<table>
+<tr><th>区分</th><th>ゲート</th><th>判定</th><th>根拠信頼度</th></tr>
+{''.join(gate_rows)}
+</table>
+{''.join(details)}
+{alts}
+"""
 
 
 def _render_header(report: FeasibilityReport, now: str) -> str:

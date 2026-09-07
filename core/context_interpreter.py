@@ -244,10 +244,11 @@ def interpret_context(
             "重みやスコアへの自動反映は行われませんが、レポートには記述として残ります。",
         )
 
-    model_primary = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+    model_primary = os.getenv("GEMINI_MODEL") or None
     # 1.5-flash は v1beta API でサポートされなくなったため除外
-    fallback_models = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
-    models_to_try = [model_primary] + [m for m in fallback_models if m != model_primary]
+    from . import gemini_models
+
+    models_to_try = gemini_models.candidate_chain(purpose="fast", primary=model_primary)
 
     user_input = json.dumps(
         {

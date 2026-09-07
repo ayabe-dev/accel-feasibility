@@ -328,7 +328,20 @@ def adr_derivation_rows(res: Dict[str, Any]) -> List[Dict[str, str]]:
     def man(v: float) -> str:
         return f"{v:,.0f} 万円"
 
-    return [
+    cap_rows = []
+    if res.get("capacity_est"):
+        legal = res.get("capacity_legal_max")
+        cap_rows.append({
+            "項目": "⓪ 収容定員",
+            "値": f"{res['capacity_est']} 名",
+            "根拠・式": (
+                f"{res.get('capacity_basis', '—')}"
+                + (f"／{res.get('municipality_name', '')}条例の法令上限 {legal}名"
+                   if legal else "")
+            ),
+        })
+
+    return cap_rows + [
         {"項目": "① ADR（1泊単価）", "値": yen(adr), "根拠・式": res.get("revpar_source", "—")},
         {"項目": "② 稼働率", "値": f"{occ * 100:.1f} %", "根拠・式": "コンプ/手入力/エリア相場"},
         {"項目": "③ RevPAR", "値": yen(adr * occ), "根拠・式": "① × ②"},

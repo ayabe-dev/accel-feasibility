@@ -17,8 +17,9 @@ from .context_interpreter import interpret_context
 from .distance import check_distance_regulation
 from .estimator import estimate, scale_notes
 from .fire_safety_check import run_fire_safety_checks
+from .license_gate import judge_license
 from .lodging_business_check import run_lodging_business_checks
-from .municipality import detect_municipality
+from .municipality import detect_municipality, get_municipality_name
 from .models import (
     DistanceCheckResult,
     ExtractedDocument,
@@ -64,6 +65,7 @@ def run(
     has_nearby_facility: Optional[bool] = None,
     nearby_facilities: Optional[List[str]] = None,
     municipality_key: Optional[str] = None,
+    research=None,
 ) -> FeasibilityReport:
     """総合判定を実行."""
     # 1. 抽出書類から ProjectInput を補完（先に！住所も上書きあり得る）
@@ -139,6 +141,7 @@ def run(
         zoning=zoning,
         missing_docs=missing,
         milestone_flags=milestone_flags,
+        municipality_key=municipality_key,
     )
 
     # 9. 警告
@@ -154,7 +157,7 @@ def run(
     application_req = judge_application_requirement(project, geo, zoning)
 
     # 11. Phase 4：建基法技術基準チェックリスト
-    building_checks = run_building_code_checks(project, geo)
+    building_checks = run_building_code_checks(project, geo, municipality_key)
 
     # 12. Phase 5：消防法 + 旅館業法チェック
     fire_checks = run_fire_safety_checks(project)
@@ -197,7 +200,20 @@ def run(
             report_summary=report_summary,
         )
 
+    # 14. 旅館業許可の可否判定（本アプリの主判定）
+    #     research は自治体条例の調査結果。None なら全国共通法令のみで判定する。
+    license_judgment = judge_license(
+        project=project,
+        geo=geo,
+        zoning=zoning,
+        municipality_key=municipality_key,
+        municipality_name=get_municipality_name(municipality_key) or "",
+        research=research,
+        distance=distance,
+    )
+
     return FeasibilityReport(
+        license_judgment=license_judgment,
         input=project,
         geo=geo,
         zoning=zoning,

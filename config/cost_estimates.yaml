@@ -1,7 +1,5 @@
-# パターン別 概算費用・期間レンジ
-# 単位：万円、月
-# あくまで一次スクリーニング用の目安。最終見積は個別案件で精査。
-
+# ⚠️ このファイルは配信用ミラーです。数値の出典・経緯・適用範囲のコメントは
+#    社内リポジトリの正本（systems/feasibility/config/）にあります。
 patterns:
   A:
     name: "検査済証あり / 築浅 / 図書完備 / 改修履歴なし"
@@ -103,7 +101,6 @@ patterns:
       months_max: 28
       confidence: "低（個別精査必須）"
 
-# 業態別の追加コスト
 business_type_adjustments:
   hotel_ryokan:
     name: "旅館・ホテル営業"
@@ -114,8 +111,6 @@ business_type_adjustments:
       - "玄関帳場（フロント）必要、ICT代替は自治体ごとに運用差"
       - "消防：自火報は原則全件、SP は11階以上または3,000㎡以上"
 
-# 構造別の改修コスト調整係数
-# patterns.*.renovation の cost_min/max にこの係数を掛ける（積み増し方向）
 structure_multipliers:
   wooden:
     name: "木造"
@@ -134,7 +129,6 @@ structure_multipliers:
     multiplier: 1.10
     note: "耐火被覆の追加コストで10%増"
 
-# 規模別の概算坪単価帯（参考。客室仕様により幅）
 unit_cost_per_tsubo:
   budget_simple:
     name: "シンプル改修"
@@ -152,7 +146,6 @@ unit_cost_per_tsubo:
     range_max: 250
     note: "ホテルブランド準拠、内装フル更新"
 
-# 規模別の追加考慮事項
 scale_thresholds:
   under_200m2:
     note: "用途変更確認申請は原則不要（2019年法改正以降）。ただし建基法・消防法の遡及あり。"

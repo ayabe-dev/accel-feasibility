@@ -1,13 +1,5 @@
-# 用途地域 × 業態 可否ルール
-# 根拠：建築基準法48条 / 別表第二
-# 業態：旅館・ホテル営業（旅館業法）
-#
-# status:
-#   allowed       立地可
-#   conditional   条件付き可（規模制限あり）
-#   prohibited    立地不可（48条本則）
-#   special_only  特定行政庁の許可があれば可（48条ただし書き）
-
+# ⚠️ このファイルは配信用ミラーです。数値の出典・経緯・適用範囲のコメントは
+#    社内リポジトリの正本（systems/feasibility/config/）にあります。
 zoning_areas:
   first_low_residential:
     code: "1低層"
@@ -108,7 +100,6 @@ zoning_areas:
       status: allowed
       reason: "市街化調整区域や非線引き区域。原則可だが、市街化調整区域は別途許可が必要。"
 
-# 防火地域による構造要件への影響（参考）
 fire_protection_areas:
   fire_district:
     name: "防火地域"
