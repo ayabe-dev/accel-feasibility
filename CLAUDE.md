@@ -62,6 +62,15 @@ mgmt_fee_rate: 0.15   # 出典: 宮沢さん実績25物件・2026-09-03（minpak
   例：`chore(基準): 運営代行を5%→15%へ（宮沢さん実績25物件・2026-09-03）`
 - 作業前に `git pull --ff-only`。
 
+> ⚠️ **push はGitHubアカウントの切替が要る。** このリポジトリの持ち主は `ayabe-dev` だが、
+> `gh` の既定アクティブは `ayabe-shota-accel`（minpaku 側）。そのまま push すると 403 で弾かれる。
+> AIは push 前後で次を自動実行すること（人が指示する必要はない）:
+> ```
+> gh auth switch --hostname github.com --user ayabe-dev
+> git push origin <branch>
+> gh auth switch --hostname github.com --user ayabe-shota-accel   # 必ず戻す
+> ```
+
 ---
 
 ## §確認フロー
