@@ -33,9 +33,14 @@ from .models import (
     ZoningJudgment,
 )
 
-# 旅館業法の用途は建基法上「特殊建築物」(別表第一(2)項)
+# 建基法上の特殊建築物（別表第一(2)項「ホテル、旅館」）に該当する業態。
+# 簡易宿所営業も旅館業法上の営業区分が違うだけで、建基法の用途区分は
+# 旅館・ホテル営業と同じ「ホテル又は旅館」。ここから漏らすと
+# 「特殊建築物に該当しない＝用途変更確認申請は不要」という誤判定になる。
+# 一方、住宅宿泊事業（民泊）は建基法上「住宅」のままなので該当しない。
 SPECIAL_BUILDING_BUSINESS_TYPES = {
     BusinessType.HOTEL_RYOKAN,
+    BusinessType.SIMPLE_LODGING,
 }
 
 # 旅館・ホテルからみた類似用途（住宅は非類似）
@@ -69,7 +74,10 @@ def judge_application_requirement(
 
     is_special = project.business_type in SPECIAL_BUILDING_BUSINESS_TYPES
     is_similar = False  # 住宅→旅館は非類似で固定（MVPスコープ）
-    floor_area = project.floor_area_m2
+    # 200㎡判定は「用途変更部分」の面積で行う（延床全体とは限らない）。
+    # 建物の一部だけを宿泊用途にする計画では、ここを延床で見ると
+    # 不要な確認申請を前提にした過大な見積になる。
+    floor_area = project.conversion_area_m2 or project.floor_area_m2
 
     articles = [
         "建築基準法6条1項1号（特殊建築物の確認申請）",
@@ -77,11 +85,16 @@ def judge_application_requirement(
         "建築基準法施行令137条の18（類似用途）",
     ]
 
-    # 業態が特殊建築物でない → 確認申請不要（このMVPでは旅館固定のため通常通らない）
+    # 住宅宿泊事業（民泊）は建基法上「住宅」のままなので用途変更にあたらない
     if not is_special:
         return ApplicationRequirementJudgment(
             required=False,
-            reason="対象業態が特殊建築物に該当しないため、用途変更確認申請は不要です。",
+            reason=(
+                "住宅宿泊事業（民泊）は建築基準法上「住宅」として扱われ、"
+                "用途の変更にあたらないため用途変更確認申請は不要です。"
+                "ただし住宅宿泊事業法の安全措置（非常用照明・避難経路表示等）と"
+                "消防法令上の要件は別途適用されます。"
+            ),
             is_special_building=False,
             is_similar_use=False,
             floor_area_subject_m2=floor_area,

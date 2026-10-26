@@ -1,0 +1,74 @@
+# ⚠️ このファイルは配信用ミラーです。数値の出典・経緯・適用範囲のコメントは
+#    社内リポジトリの正本（systems/feasibility/config/）にあります。
+version: 2026.09.2
+as_of: '2026-09-07'
+
+meeting:
+  name: 朝会（毎日15分）
+  purpose: 前日に出てきた物件を「購入検討物件にまとめるかどうか」を決める
+  minutes: 15
+  seconds_per_property: 60
+  max_properties: 5
+  out_of_scope: 検討中案件の深掘り（〇〇台など）。それは定例でやる
+
+price:
+  basis_note: >-
+    収益価格[A]（NOI還元）と原価法[B]（土地値＋建物）から作った想定適正価格レンジの mid 比。
+    取引事例（レインズ成約・取引価格情報）との比較ではない。
+  great_discount_pct: -20.0
+  ok_discount_pct: 0.0
+  reject_premium_pct: 15.0
+  hold_if_discount_needed: true
+
+land:
+  basis_note: >-
+    土地値 = 土地面積(坪) × 土地坪単価。築古で法定耐用年数を超えていると建物価値は0になり、
+    原価法[B] は実質「土地値」と同じになる。土地坪単価はエリア既定の代表値なので、
+    路線価・地価公示・成約事例で分かるなら②収益化タブで実勢を手入力する。
+  prefer_land_basis_if_age_over: 30
+  solid_ratio: 1.0
+  ok_ratio: 1.3
+  reject_ratio: 2.0
+
+license:
+  accept_verdicts: [grantable, conditional]
+  hold_verdicts: [consult, unknown]
+  reject_verdicts: [difficult, blocked]
+  difficulty_by_pattern:
+    A: {label: 軽い（検査済証あり・築浅・図書完備）, score: 1}
+    B: {label: 標準, score: 2}
+    C: {label: 重い（築古・図書欠落）, score: 3}
+    D: {label: 最重量（検査済証なし＝法適合調査フル）, score: 4}
+    UNKNOWN: {label: 不明（安全側でC相当）, score: 3}
+  hold_if_pattern_in: [D]
+  max_months_to_open: 18
+
+yield:
+  basis_note: NOI ÷ 総投資額（取得価格 ×(1+取得諸費用率) ＋ 初期工事費）
+  target_noi_yield_pct: 7.0
+  min_noi_yield_pct: 5.0
+  min_dscr: 1.2
+  min_dscr_hold: 1.0
+
+verdicts:
+  list_up:
+    label: 🟢 購入検討リストに載せる
+    action: 資料5点を揃えて Notion 物件ページを作る（運用マニュアル §2-0）
+  hold:
+    label: 🟡 保留（1点待ち）
+    action: 待ち先と回答期限を明示して、次の朝会に再提出する
+  drop:
+    label: 🔴 見送り
+    action: 落とした理由を1行残す（同じ物件が再提出されるのを防ぐ）
+
+required_inputs:
+  - {key: address,        label: 住所,          why: 用途地域・距離規制・エリア相場の起点}
+  - {key: business_type,  label: 業態,          why: 旅館業/簡易宿所/民泊で基準が変わる}
+  - {key: floor_area_m2,  label: 延床面積,      why: 200㎡ライン・工事費・定員}
+  - {key: floors_above,   label: 地上階数,      why: 法27条耐火・二方向避難}
+  - {key: built_year,     label: 築年,          why: 新耐震・調査パターン・残存耐用年数}
+  - {key: structure,      label: 構造,          why: 耐火要件・耐用年数・融資年数}
+  - {key: has_inspection, label: 検査済証の有無, why: 調査パターン A〜D の主軸}
+  - {key: purchase_price, label: 売出価格,      why: 論点1・3が答えられない（最頻の欠落）}
+  - {key: land_area,      label: 土地面積,      why: '原価法[B]・土地坪単価。無いと割安判定が収益価格のみになる'}
+  - {key: guest_rooms,    label: 想定客室数,    why: 売上の室数。一棟貸しなら不要}

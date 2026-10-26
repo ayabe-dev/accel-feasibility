@@ -14,11 +14,12 @@ from api import gis_client
 from .application_check import judge_application_requirement
 from .building_code_check import run_building_code_checks
 from .context_interpreter import interpret_context
-from .distance import check_distance_regulation
+from .distance import check_distance_regulation, get_distance_m
 from .estimator import estimate, scale_notes
 from .fire_safety_check import run_fire_safety_checks
+from .license_gate import judge_license
 from .lodging_business_check import run_lodging_business_checks
-from .municipality import detect_municipality
+from .municipality import detect_municipality, get_municipality_name
 from .models import (
     DistanceCheckResult,
     ExtractedDocument,
@@ -32,29 +33,11 @@ from .pattern_classifier import classify_pattern
 from .todo_generator import generate_todos, missing_documents
 from .zoning import fire_district_note, judge_zoning
 
-# 用途地域名 → 内部コード変換用（マイソク等から抽出した日本語名を変換）
-ZONING_NAME_TO_CODE = {
-    "第一種低層住居専用地域": "first_low_residential",
-    "第二種低層住居専用地域": "second_low_residential",
-    "第一種中高層住居専用地域": "first_mid_residential",
-    "第二種中高層住居専用地域": "second_mid_residential",
-    "第一種住居地域": "first_residential",
-    "第二種住居地域": "second_residential",
-    "準住居地域": "quasi_residential",
-    "田園住居地域": "rural_residential",
-    "近隣商業地域": "neighborhood_commercial",
-    "商業地域": "commercial",
-    "準工業地域": "quasi_industrial",
-    "工業地域": "industrial",
-    "工業専用地域": "exclusive_industrial",
-}
-
-FIRE_NAME_TO_CODE = {
-    "防火地域": "fire_district",
-    "準防火地域": "quasi_fire_district",
-    "指定なし": "no_district",
-    "なし": "no_district",
-}
+# 用途地域名・防火地域名の表は core/zoning_names.py が正本（旧名は別名で残す）。
+# 重説・マイソクは「第１種住居地域」と全角で書かれていることがあるので、
+# 必ず zoning_code_of() を通して表記ゆれを吸収する〔2026-09-08〕。
+from .zoning_names import FIRE_NAME_TO_CODE, ZONING_NAME_TO_CODE  # noqa: F401
+from .zoning_names import fire_code_of, zoning_code_of
 
 
 def run(
@@ -64,6 +47,7 @@ def run(
     has_nearby_facility: Optional[bool] = None,
     nearby_facilities: Optional[List[str]] = None,
     municipality_key: Optional[str] = None,
+    research=None,
 ) -> FeasibilityReport:
     """総合判定を実行."""
     # 1. 抽出書類から ProjectInput を補完（先に！住所も上書きあり得る）
@@ -104,6 +88,9 @@ def run(
 
     # 5. 距離規制
     #    GIS API から取得した近接施設があれば優先（自動判定）
+    #    GISは最大半径で取っているので、自治体の距離（例：墨田区110m・他は100m）で絞る
+    limit_m = get_distance_m(municipality_key)
+    geo.nearby_facilities = [f for f in geo.nearby_facilities if f.distance_m <= limit_m]
     auto_nearby_names: List[str] = []
     if geo.nearby_facilities:
         for f in geo.nearby_facilities:
@@ -139,6 +126,7 @@ def run(
         zoning=zoning,
         missing_docs=missing,
         milestone_flags=milestone_flags,
+        municipality_key=municipality_key,
     )
 
     # 9. 警告
@@ -154,7 +142,7 @@ def run(
     application_req = judge_application_requirement(project, geo, zoning)
 
     # 11. Phase 4：建基法技術基準チェックリスト
-    building_checks = run_building_code_checks(project, geo)
+    building_checks = run_building_code_checks(project, geo, municipality_key)
 
     # 12. Phase 5：消防法 + 旅館業法チェック
     fire_checks = run_fire_safety_checks(project)
@@ -197,7 +185,20 @@ def run(
             report_summary=report_summary,
         )
 
+    # 14. 旅館業許可の可否判定（本アプリの主判定）
+    #     research は自治体条例の調査結果。None なら全国共通法令のみで判定する。
+    license_judgment = judge_license(
+        project=project,
+        geo=geo,
+        zoning=zoning,
+        municipality_key=municipality_key,
+        municipality_name=get_municipality_name(municipality_key) or "",
+        research=research,
+        distance=distance,
+    )
+
     return FeasibilityReport(
+        license_judgment=license_judgment,
         input=project,
         geo=geo,
         zoning=zoning,
@@ -330,7 +331,7 @@ def _build_geo_from_docs(
             name = f.get("zoning")
             if isinstance(name, str) and name.strip():
                 cleaned = name.strip()
-                code = ZONING_NAME_TO_CODE.get(cleaned)
+                code = zoning_code_of(cleaned)
                 if code:
                     zoning_code = code
                     zoning_name = cleaned
@@ -338,7 +339,7 @@ def _build_geo_from_docs(
         if fire_district is None:
             fd = f.get("fire_district")
             if isinstance(fd, str) and fd.strip():
-                fire_district = FIRE_NAME_TO_CODE.get(fd.strip(), None)
+                fire_district = fire_code_of(fd)
         if coverage is None:
             v = f.get("coverage_ratio_pct")
             if isinstance(v, (int, float)):

@@ -59,6 +59,8 @@ class ScoreBreakdown(BaseModel):
 # ---------------------------------------------------------------------------
 
 DEFAULT_WEIGHTS: Dict[str, float] = {
+    # 許可可否（主判定）— これがこのアプリの結論なので最大重み
+    "license_verdict": 10.0,
     # 立地・規制系
     "distance_regulation": 3.0,  # 学校等100m（手続き上の連絡が主、却下は稀なため軽め）
     "district_plan": 6.0,  # 地区計画
@@ -102,20 +104,53 @@ def compute_score(
             blocked_reason=report.overall_summary,
         )
 
+    # 旅館業許可が下りない（立地・条例で越えられない）ならスコアは意味を持たない。
+    # スコアと許可判定が食い違って見えるのを防ぐため、こちらでもブロックする。
+    lic = getattr(report, "license_judgment", None)
+    if lic is not None and getattr(lic.verdict, "value", "") == "blocked":
+        return ScoreBreakdown(
+            total=0.0,
+            grade="✕",
+            blocked=True,
+            blocked_reason=lic.headline,
+        )
+
     items: List[ScoreItem] = []
+
+    # 0. 許可可否（主判定）
+    if lic is not None:
+        verdict_scores = {
+            "grantable": 100.0,
+            "conditional": 75.0,
+            "consult": 55.0,
+            "difficult": 25.0,
+            "unknown": 50.0,
+        }
+        v = getattr(lic.verdict, "value", "unknown")
+        items.append(
+            ScoreItem(
+                key="license_verdict",
+                label="旅館業許可の可否（主判定）",
+                category="許可可否",
+                score=verdict_scores.get(v, 50.0),
+                weight=w["license_verdict"],
+                note=f"{lic.verdict_label}（情報充足率 {lic.data_completeness * 100:.0f}%）",
+            )
+        )
 
     # 1. 距離規制
     #    実務上は「都道府県知事への意見聴取が必要」という手続きが課されるだけで、
     #    施設があってもほぼ却下されない。よって減点は軽微（100→75）
+    dist_m = report.distance.distance_m if report.distance else 100
     if report.geo.nearby_facilities:
         distance_score = 75.0
         note = (
-            f"半径100m以内に{len(report.geo.nearby_facilities)}件 → "
+            f"半径{dist_m}m以内に{len(report.geo.nearby_facilities)}件 → "
             "保健所への連絡・意見聴取が必要（手続き上の対応のみ、却下はほぼなし）"
         )
     else:
         distance_score = 100.0
-        note = "100m以内に対象施設なし"
+        note = f"{dist_m}m以内に対象施設なし"
     items.append(
         ScoreItem(
             key="distance_regulation",
@@ -456,6 +491,15 @@ def _to_grade(score: float) -> str:
 
 
 WEIGHT_METADATA = [
+    {
+        "key": "license_verdict",
+        "label": "旅館業許可の可否（主判定）",
+        "category": "許可可否",
+        "description": (
+            "core/license_gate.py の総合判定。旅館業法3条の不許可事由を起点にした"
+            "12ゲートの結果。⛔不可の場合はスコア自体をブロックする。"
+        ),
+    },
     {
         "key": "distance_regulation",
         "label": "距離規制（学校・保育園100m）",

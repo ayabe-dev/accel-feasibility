@@ -209,7 +209,7 @@ RULE_DETAILS: List[Dict] = [
         ),
         "practical": (
             "用途変更案件の半数近くがB・C・D。\n"
-            "**フラッツ目黒（1989年築・検査済証あり・RC造）はパターンC**\n"
+            "**例：1989年築・検査済証あり・RC造 → パターンC**\n"
             "→ ガイドライン調査相当の現況調査が必要、コスト高め。\n"
             "それでも計画自体は進められる範囲。"
         ),
@@ -230,7 +230,7 @@ RULE_DETAILS: List[Dict] = [
         "scoring": "節目1件で35点減点、2件で70点減点、3件で全減点",
         "practical": (
             "**新耐震前（1981以前）**は構造補強がほぼ必須。\n"
-            "**フラッツ目黒（1989年）**は新耐震後だが2007年改正前 → 構造計算書の再評価推奨。\n"
+            "**例：1989年築**は新耐震後だが2007年改正前 → 構造計算書の再評価推奨。\n"
             "1981〜2007のRC造は「構造的に問題は少ないが、現行基準で再計算するとアウト」"
             "になるケースあり。"
         ),
@@ -255,7 +255,7 @@ RULE_DETAILS: List[Dict] = [
         ),
         "practical": (
             "2019年6月改正で200㎡基準に緩和（旧100㎡）。\n"
-            "**フラッツ目黒（256.63㎡）は200㎡超 → 申請必要**\n"
+            "**例：延床256.63㎡ は200㎡超 → 申請必要**\n"
             "申請費用の目安：100〜350万円（規模による）。\n"
             "**重要：申請不要でも建基法・消防法は遡及適用**される。"
         ),
@@ -278,7 +278,7 @@ RULE_DETAILS: List[Dict] = [
         "practical": (
             "**最重要規定の一つ。**\n"
             "3階以上の旅館は耐火建築物必須。非耐火構造なら大規模改修。\n"
-            "**フラッツ目黒は4階建RC造（耐火相当）**→ 適合の見込み大。\n"
+            "**例：4階建RC造（耐火相当）**→ 適合の見込み大。\n"
             "竣工図で耐火被覆・主要構造部の認定番号を確認するのが理想。"
         ),
         "response": "竣工図書で耐火性能を確認、不足あれば耐火被覆追加",
@@ -378,7 +378,7 @@ RULE_DETAILS: List[Dict] = [
         ],
         "scoring": "200㎡以上で要確認60点、未満で非該当90点",
         "practical": (
-            "**フラッツ目黒は256㎡＞200㎡ → 内装制限あり。**\n"
+            "**例：延床256㎡＞200㎡ → 内装制限あり。**\n"
             "クロス張り替えで対応するなら難燃クロスを選択（コスト数十万円増）。"
         ),
         "response": "改修時は仕上げ材を難燃以上に選定",
@@ -469,7 +469,7 @@ RULE_DETAILS: List[Dict] = [
         ],
         "scoring": "義務あり90点（既設前提）、なし90点（不要）",
         "practical": (
-            "**フラッツ目黒（4階建256㎡）は対象外** → 影響なし。\n"
+            "**例：4階建256㎡は対象外** → 影響なし。\n"
             "大型ホテル変換時のみ要注意。新設費用は数千万円〜。"
         ),
         "response": "対象なら設置検討、対象外なら気にしなくてOK",
@@ -487,7 +487,7 @@ RULE_DETAILS: List[Dict] = [
         ],
         "scoring": "義務あり60点（コスト中）、なし90点",
         "practical": (
-            "**フラッツ目黒（RC造256㎡）→ 1,400㎡未満なので対象外。**\n"
+            "**例：RC造256㎡ → 1,400㎡未満なので対象外。**\n"
             "大規模物件のみ。新設費用：100〜500万円。"
         ),
         "response": "対象なら設備設計を発注",
@@ -654,6 +654,8 @@ def render_guide_page() -> None:
         st.info(f"📊 現在の重み合計: **{total_w:.1f}**")
 
     st.divider()
+    _render_municipality_section()
+    st.divider()
 
     # カテゴリ別にグループ化
     cats: Dict[str, List[Dict]] = {}
@@ -673,6 +675,114 @@ def render_guide_page() -> None:
         st.header(f"📂 {cat}")
         for rule in rules:
             _render_rule(rule)
+
+
+def _render_municipality_section() -> None:
+    """自治体固有ルール（実データで作り込み済みの自治体）を表示する."""
+    from core import municipality as _m
+
+    st.header("🏛️ 自治体固有ルール（実データ反映済み）")
+    st.caption(
+        "汎用の法令チェックに加えて、区が独自に公表している条例・手引きの数値を"
+        "そのまま反映している自治体です。該当住所を入力すると判定に自動で反映されます。"
+    )
+
+    rule = _m.get_municipality_rule("meguro_ku")
+    if not rule:
+        st.info("自治体固有データは未登録です。")
+        return
+
+    with st.expander("📗 目黒区（区の手引き・条例を実データで反映）", expanded=True):
+        st.markdown(f"**出典時点**：{rule.get('as_of', '—')}")
+        for src in rule.get("sources", []):
+            st.markdown(f"- [{src.get('title', '')}]({src.get('url', '')})")
+
+        st.markdown("#### 旅館業法・区条例の数値基準")
+        cap = rule.get("capacity", {})
+        ra = rule.get("room_area", {})
+        fee = rule.get("application_fee_yen", {})
+        wb = rule.get("washbasin", {})
+        st.table({
+            "項目": [
+                "客室面積（旅館・ホテル）", "客室面積（簡易宿所）",
+                "定員（旅館・ホテル）", "定員（簡易宿所）",
+                "面積算定", "客室の地階", "窓のない客室",
+                "洗面（共同）", "申請手数料（旅館・ホテル）", "申請手数料（簡易宿所）",
+            ],
+            "基準": [
+                f"1室 {ra.get('min_m2')}㎡以上（寝台を置く客室は {ra.get('bed_only_min_m2')}㎡以上）",
+                f"客室延床 {ra.get('simple_lodging_total_min_m2')}㎡以上"
+                f"（10人未満は {ra.get('simple_lodging_per_guest_m2')}㎡×人数）",
+                f"有効面積 {cap.get('hotel_ryokan_m2_per_guest')}㎡につき1人",
+                f"有効面積 {cap.get('simple_lodging_m2_per_guest')}㎡につき1人",
+                ra.get("measurement", "—"),
+                "原則設けられない" if ra.get("basement_prohibited") else "—",
+                "不可" if ra.get("window_required") else "—",
+                f"定員 {wb.get('guests_per_tap')}人につき1給水栓",
+                f"{fee.get('hotel_ryokan', 0):,}円",
+                f"{fee.get('simple_lodging', 0):,}円",
+            ],
+            "根拠": [
+                "令1-1-1", "令1-2-1／条9-1-5", "条4-*-6-ア", "条4-*-6-イ",
+                "手引き", "手引き", "手引き", "規12", "手引き", "手引き",
+            ],
+        })
+
+        st.markdown("#### 便所の必要数（合計定員別・規11-*-1）")
+        table = (rule.get("toilet_count_by_capacity") or {}).get("table", [])
+        st.table({
+            "合計定員": [f"{r['up_to']}人以下" for r in table],
+            "必要便器数": [r["count"] for r in table],
+        })
+        st.caption((rule.get("toilet_count_by_capacity") or {}).get("over_30_note", ""))
+
+        st.markdown("#### 玄関帳場（フロント）")
+        fd = rule.get("front_desk", {})
+        if fd.get("unmanned_allowed") is False:
+            st.error("⚠️ **完全無人運営は不可**（従業員の常駐が必要）— 旅館・ホテル/簡易宿所/下宿すべて")
+        st.markdown("代替設備を使う場合の要件：")
+        for req in fd.get("substitute_requirements", []):
+            st.markdown(f"- {req}")
+        st.caption(
+            f"カメラ要件：{fd.get('camera_requirements', '')}／"
+            f"フロント別置は{fd.get('remote_front_desk_max_distance_m', '—')}m以内"
+        )
+
+        st.markdown("#### 用途地域（旅館・ホテル）")
+        z = rule.get("zoning", {})
+        st.markdown("**立地可**：" + "／".join(z.get("allowed", [])))
+        st.markdown("**立地不可**：" + "／".join(z.get("prohibited", [])))
+        st.warning(
+            "**区内に指定のない用途地域**：" + "／".join(z.get("not_designated_in_ward", []))
+            + f"（{z.get('not_designated_note', '')}）"
+        )
+        for sp in z.get("special_district_prohibitions", []):
+            st.error(f"⛔ {sp}")
+        for ex in z.get("extra_notes", []):
+            st.caption(f"・{ex}")
+        if z.get("map_service"):
+            st.info(f"用途地域の確認：{z['map_service']}")
+
+        st.markdown("#### 建築基準法の注意点（区公表資料）")
+        bc = rule.get("building_code_notes", {})
+        for b in bc.get("blocking", []):
+            st.error(f"⛔ **{b.get('title')}** — {b.get('detail')}")
+        for m in bc.get("major", []):
+            st.markdown(f"- **{m.get('title')}**：{m.get('detail')}")
+        if bc.get("note_200m2"):
+            st.warning(bc["note_200m2"])
+        rec = rule.get("record_availability", {})
+        if rec.get("note"):
+            st.caption(f"記録照会：{rec['note']}")
+
+        st.markdown("#### 維持管理・遵守事項")
+        for e in rule.get("extra_rules", []):
+            st.markdown(f"- {e}")
+
+        st.markdown("#### 相談窓口")
+        for c in rule.get("contacts", []):
+            fax = f"／FAX {c['fax']}" if c.get("fax") else ""
+            st.markdown(f"- **{c.get('role')}**：{c.get('dept')}　`{c.get('tel')}`{fax}")
 
 
 def _render_rule(rule: Dict) -> None:

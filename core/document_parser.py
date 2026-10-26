@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from . import gemini_models
 from .models import DocumentType, ExtractedDocument
 
 logger = logging.getLogger(__name__)
@@ -161,10 +162,95 @@ def parse_document(uploaded: UploadedFile) -> ExtractedDocument:
     )
 
 
+# ---------------------------------------------------------------------------
+# 読み取り精度のための前処理・後検証
+# ---------------------------------------------------------------------------
+
+
+def _pdf_to_page_images(pdf_bytes: bytes, dpi: int, max_pages: int):
+    """PDFを高解像度のページ画像にする（スキャン書類の読み取り精度対策）.
+
+    PDFをそのままLLMに渡すと、スキャン原稿は内部解像度のまま扱われて文字が潰れる。
+    300dpi 程度に焼き直すと、重説・検査済証・マイソクの小さな表組みが読めるようになる。
+
+    pdf2image / poppler が無い環境では None を返し、呼び出し側が生PDFにフォールバックする。
+    """
+    try:
+        from pdf2image import convert_from_bytes  # type: ignore
+    except ImportError:
+        logger.info("pdf2image が無いため PDF をそのまま渡します（精度は落ちます）")
+        return None
+
+    try:
+        import io
+
+        pages = convert_from_bytes(pdf_bytes, dpi=dpi, fmt="png")
+    except Exception as exc:  # noqa: BLE001 - poppler未導入・破損PDF等
+        logger.warning(f"PDFの画像化に失敗（生PDFで続行）: {exc}")
+        return None
+
+    out = []
+    for page in pages[:max_pages]:
+        import io as _io
+
+        buf = _io.BytesIO()
+        page.save(buf, format="PNG")
+        out.append(buf.getvalue())
+    return out or None
+
+
+# 実務でありえない値を弾くための範囲（誤読の検知が目的。値は書き換えない）
+_SANITY_RANGES = {
+    "total_floor_area_m2": (5.0, 100000.0, "延床面積"),
+    "building_area_m2": (5.0, 100000.0, "建築面積"),
+    "site_area_m2": (5.0, 100000.0, "敷地面積"),
+    "floors_above": (1, 60, "地上階数"),
+    "floors_below": (0, 10, "地下階数"),
+    "coverage_ratio_pct": (10, 100, "建ぺい率"),
+    "floor_area_ratio_pct": (50, 1500, "容積率"),
+    "road_width_m": (0.5, 50.0, "接道幅員"),
+    "built_year": (1900, 2100, "建築年"),
+    "built_month": (1, 12, "建築月"),
+    "total_units": (1, 2000, "総戸数"),
+}
+
+
+def sanity_warnings(fields: dict) -> List[str]:
+    """抽出値の明らかな誤読を警告にする（値は自動修正しない）."""
+    out: List[str] = []
+    for key, (lo, hi, label) in _SANITY_RANGES.items():
+        v = fields.get(key)
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            num = float(v)
+        except (TypeError, ValueError):
+            out.append(f"⚠️ {label}が数値として読めません（抽出値: {v!r}）。原本を確認してください")
+            continue
+        if not (lo <= num <= hi):
+            out.append(
+                f"⚠️ {label} {v} は想定範囲（{lo:g}〜{hi:g}）の外です。"
+                "誤読の可能性＝原本を確認してください"
+            )
+    # 面積の整合（建築面積 > 延床 はありえない）
+    try:
+        ba = float(fields.get("building_area_m2") or 0)
+        fa = float(fields.get("total_floor_area_m2") or 0)
+        if ba > 0 and fa > 0 and ba > fa * 1.01:
+            out.append(
+                f"⚠️ 建築面積 {ba:g}㎡ が延床面積 {fa:g}㎡ を超えています＝どちらかが誤読の可能性"
+            )
+    except (TypeError, ValueError):
+        pass
+    return out
+
+
 def _parse_with_gemini(uploaded: UploadedFile) -> ExtractedDocument:
     """Google Gemini で書類解析（リトライ＋フォールバックモデル付き）."""
     api_key = os.getenv("GEMINI_API_KEY")
-    model_primary = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+    # 読み取りは精度優先。モデル名の解決（廃止への自己修復含む）は core/gemini_models へ委譲する。
+    # 明示指定したいときだけ GEMINI_EXTRACT_MODEL / GEMINI_MODEL を設定する。
+    model_primary = os.getenv("GEMINI_EXTRACT_MODEL") or os.getenv("GEMINI_MODEL") or None
 
     if not _GEMINI_AVAILABLE or not api_key:
         return ExtractedDocument(
@@ -176,91 +262,100 @@ def _parse_with_gemini(uploaded: UploadedFile) -> ExtractedDocument:
             ],
         )
 
-    # フォールバックモデルチェーン（503/429 で順次切替）
-    # 1.5-flash は v1beta API でサポートされなくなったため除外
-    models_to_try: List[str] = [model_primary]
-    for fallback in [
-        "gemini-flash-latest",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash",
-    ]:
-        if fallback not in models_to_try:
-            models_to_try.append(fallback)
-
     client = google_genai.Client(api_key=api_key)
 
     mime = uploaded.mime_type.lower()
     if mime == "image/jpg":
         mime = "image/jpeg"
 
-    contents = [
-        genai_types.Part.from_bytes(
-            data=uploaded.bytes_data,
-            mime_type=mime,
-        ),
-        f"ファイル名: {uploaded.name}\n上記スキーマで抽出してください。",
+    prep_notes: List[str] = []
+    parts = []
+    if mime == "application/pdf":
+        dpi = int(os.getenv("EXTRACT_PDF_DPI", "300"))
+        max_pages = int(os.getenv("EXTRACT_MAX_PAGES", "12"))
+        page_images = _pdf_to_page_images(uploaded.bytes_data, dpi=dpi, max_pages=max_pages)
+        if page_images:
+            for img in page_images:
+                parts.append(genai_types.Part.from_bytes(data=img, mime_type="image/png"))
+            prep_notes.append(
+                f"PDFを{dpi}dpiの画像{len(page_images)}ページに焼き直して読みました"
+                + ("（以降のページは未読）" if len(page_images) >= max_pages else "")
+            )
+        else:
+            parts.append(
+                genai_types.Part.from_bytes(data=uploaded.bytes_data, mime_type=mime)
+            )
+            prep_notes.append(
+                "PDFをそのまま読みました（pdf2image/poppler が無い環境。"
+                "スキャン原稿だと精度が落ちます）"
+            )
+    else:
+        parts.append(genai_types.Part.from_bytes(data=uploaded.bytes_data, mime_type=mime))
+
+    contents = parts + [
+        f"ファイル名: {uploaded.name}\n"
+        "上記スキーマで抽出してください。**書かれていない項目はキーを省略**し、"
+        "推測で埋めないこと。数字は原本の表記をそのまま数値化し、単位換算が必要なときは"
+        "warnings に換算内容を書いてください。",
     ]
 
     config = genai_types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
         response_mime_type="application/json",
-        max_output_tokens=4096,
+        max_output_tokens=8192,
+        temperature=0.0,  # 抽出は毎回同じ答えになってほしい（既定1.0だと値がブレる）
     )
 
-    last_error: Optional[Exception] = None
-    attempted_models: List[str] = []
-
-    for model_name in models_to_try:
-        attempted_models.append(model_name)
-        for attempt in range(3):  # 最大3回リトライ/モデル
+    def _run(model_name: str):
+        """1モデルで実行（503/429 は同一モデル内でリトライ）."""
+        last: Optional[Exception] = None
+        for attempt in range(3):
             try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=config,
+                return client.models.generate_content(
+                    model=model_name, contents=contents, config=config
                 )
-                text = response.text or ""
-                result = _parse_response(uploaded.name, text)
-                if attempt > 0 or model_name != model_primary:
-                    result.warnings.insert(
-                        0,
-                        f"✓ {model_name} で成功（試行 {attempt + 1} / 切替試行 {attempted_models}）",
-                    )
-                return result
             except Exception as exc:  # noqa: BLE001
-                err_str = str(exc)
-                last_error = exc
-                # 503 (UNAVAILABLE) / 429 (RESOURCE_EXHAUSTED) はリトライ
-                if "503" in err_str or "UNAVAILABLE" in err_str:
-                    wait = 2 ** attempt  # 1s, 2s, 4s
-                    logger.warning(
-                        f"Gemini 503 on {model_name}, retry {attempt + 1}/3 after {wait}s"
-                    )
-                    time.sleep(wait)
+                err = str(exc)
+                last = exc
+                if "503" in err or "UNAVAILABLE" in err:
+                    time.sleep(2 ** attempt)  # 1s, 2s, 4s
                     continue
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    wait = 5 * (attempt + 1)  # 5s, 10s, 15s
-                    logger.warning(
-                        f"Gemini 429 on {model_name}, retry {attempt + 1}/3 after {wait}s"
-                    )
-                    time.sleep(wait)
+                if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                    time.sleep(5 * (attempt + 1))  # 5s, 10s, 15s
                     continue
-                # その他エラーは次モデルへ
-                logger.warning(f"Gemini error on {model_name}: {exc}")
-                break
+                raise
+        raise last if last else RuntimeError("unreachable")
 
-    logger.exception("Gemini all retries+fallbacks failed")
-    return ExtractedDocument(
-        file_name=uploaded.name,
-        document_type=DocumentType.OTHER,
-        confidence=0.0,
-        warnings=[
-            f"Gemini API 全モデルで失敗しました（試行: {', '.join(attempted_models)}）",
-            f"最後のエラー: {last_error}",
-            "対処：数分待ってリトライ、または LLM_PROVIDER=claude に切替",
-        ],
-    )
+    try:
+        response, used_model, tried = gemini_models.call_with_fallback(
+            client, _run, purpose="quality", primary=model_primary
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Gemini 書類解析が全モデルで失敗")
+        hint = ""
+        if gemini_models.is_model_not_found(exc):
+            hint = (
+                "モデル名が廃止されている可能性があります。"
+                "`GEMINI_MODEL_CHAIN` に現行モデル名を指定すると即座に追随できます。"
+            )
+        return ExtractedDocument(
+            file_name=uploaded.name,
+            document_type=DocumentType.OTHER,
+            confidence=0.0,
+            warnings=[
+                "❌ 書類の読み取りに失敗しました（**フィールドは1件も抽出できていません**）",
+                f"最後のエラー: {exc}",
+                hint or "対処：数分待ってリトライ、または LLM_PROVIDER=claude に切替",
+            ],
+        )
+
+    result = _parse_response(uploaded.name, response.text or "")
+    result.warnings.extend(sanity_warnings(result.extracted_fields or {}))
+    result.warnings.extend(prep_notes)
+    result.warnings.append(f"読み取りモデル: {used_model}")
+    if len(tried) > 1:
+        result.warnings.append(f"（試したモデル: {' → '.join(tried)}）")
+    return result
 
 
 def _parse_with_claude(uploaded: UploadedFile) -> ExtractedDocument:

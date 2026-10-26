@@ -36,6 +36,18 @@ _RULES = _load_rules()
 _MUNI = _load_muni()
 
 
+def get_distance_m(municipality_key: Optional[str] = None) -> int:
+    """自治体の距離規制の距離(m). 自治体の定めがなければ既定値（100m）."""
+    distance_m = _RULES.get("default", {}).get("distance_meters", 100)
+    if not municipality_key:
+        return distance_m
+    old = _RULES.get("municipalities", {}).get(municipality_key)
+    if old:
+        return old.get("distance_meters", distance_m)
+    rule = _MUNI.get("municipalities", {}).get(municipality_key, {}).get("distance_to_school", {})
+    return rule.get("distance_m", distance_m)
+
+
 def check_distance_regulation(
     has_nearby_facility: Optional[bool],
     nearby_facilities: Optional[List[str]] = None,
@@ -70,6 +82,7 @@ def check_distance_regulation(
     if has_nearby_facility is None:
         return DistanceCheckResult(
             has_issue=False,
+            distance_m=distance_m,
             note=(
                 f"半径{distance_m}m以内の学校・児童福祉施設等の有無が未確認です。"
                 f"周辺POIを地図で確認してください。"
@@ -88,6 +101,7 @@ def check_distance_regulation(
         )
         return DistanceCheckResult(
             has_issue=True,
+            distance_m=distance_m,
             nearby_facilities=nearby_facilities or [],
             action_required=action,
             note=(
@@ -98,5 +112,6 @@ def check_distance_regulation(
 
     return DistanceCheckResult(
         has_issue=False,
+        distance_m=distance_m,
         note=f"半径{distance_m}m以内に対象施設なし（ユーザー回答ベース）",
     )

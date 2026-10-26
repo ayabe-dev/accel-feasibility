@@ -24,6 +24,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from core.models import GeoLookupResult, NearbyFacility
+from core.zoning_names import FIRE_NAME_TO_CODE as _FIRE_NAME_TO_CODE
+from core.zoning_names import ZONING_NAME_TO_CODE as _ZONING_NAME_TO_CODE
+from core.zoning_names import fire_code_of, zoning_code_of
 
 _DEMO_DATA_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "demo_addresses.json"
@@ -33,33 +36,15 @@ REINFOLIB_BASE = "https://www.reinfolib.mlit.go.jp/ex-api/external"
 GSI_GEOCODER = "https://msearch.gsi.go.jp/address-search/AddressSearch"
 TILE_ZOOM = 14  # 用途地域・防火地域・地区計画 等
 TILE_ZOOM_POI = 13  # 学校・保育園 等のPOI（広めにとって近接施設を漏れなく検索）
-NEARBY_DISTANCE_M = 100  # 旅館業法・条例の距離規制（学校等100m以内）
+NEARBY_DISTANCE_M = 110  # 取得半径＝自治体の運用値の最大（墨田区「おおむね100m＝110m」）。自治体ごとの距離での絞り込みは judgment 側
 
 
-# ----------------------------------------------------------------------
-# 用途地域名 → 内部コード のマッピング
-# ----------------------------------------------------------------------
-
-ZONING_NAME_TO_CODE: Dict[str, str] = {
-    "第一種低層住居専用地域": "first_low_residential",
-    "第二種低層住居専用地域": "second_low_residential",
-    "第一種中高層住居専用地域": "first_mid_residential",
-    "第二種中高層住居専用地域": "second_mid_residential",
-    "第一種住居地域": "first_residential",
-    "第二種住居地域": "second_residential",
-    "準住居地域": "quasi_residential",
-    "田園住居地域": "rural_residential",
-    "近隣商業地域": "neighborhood_commercial",
-    "商業地域": "commercial",
-    "準工業地域": "quasi_industrial",
-    "工業地域": "industrial",
-    "工業専用地域": "exclusive_industrial",
-}
-
-FIRE_NAME_TO_CODE: Dict[str, str] = {
-    "防火地域": "fire_district",
-    "準防火地域": "quasi_fire_district",
-}
+# 用途地域名・防火地域名 → 内部コードの変換は core/zoning_names.py が正本。
+# （かつてここに独自の表があり、漢数字しか持っていなかったため XKT002 が返す
+#  全角数字「第１種住居地域」と一致せず、住居系6種が全滅していた＝2026-09-08 修正）
+# 旧名で参照している箇所のために別名だけ残す。
+ZONING_NAME_TO_CODE = _ZONING_NAME_TO_CODE
+FIRE_NAME_TO_CODE = _FIRE_NAME_TO_CODE
 
 
 # ----------------------------------------------------------------------
@@ -260,12 +245,17 @@ def _fetch_geojson(
     y: int,
     api_key: str,
     timeout: float = 20.0,
+    params: Optional[dict] = None,
 ) -> Optional[dict]:
+    """タイル(z/x/y)のGeoJSONを取る。`params` でAPI固有の引数（year 等）を足せる."""
     try:
+        query = {"response_format": "geojson", "z": z, "x": x, "y": y}
+        if params:
+            query.update(params)
         with httpx.Client(timeout=timeout) as client:
             r = client.get(
                 f"{REINFOLIB_BASE}/{api_path}",
-                params={"response_format": "geojson", "z": z, "x": x, "y": y},
+                params=query,
                 headers={"Ocp-Apim-Subscription-Key": api_key},
             )
             if r.status_code == 404:
@@ -318,7 +308,7 @@ def from_reinfolib(address: str) -> Optional[GeoLookupResult]:
     if zoning_feature:
         props = zoning_feature.get("properties", {})
         zoning_name = props.get("use_area_ja")
-        zoning_code = ZONING_NAME_TO_CODE.get(zoning_name) if zoning_name else None
+        zoning_code = zoning_code_of(zoning_name)
         coverage = _parse_pct(props.get("u_building_coverage_ratio_ja"))
         far = _parse_pct(props.get("u_floor_area_ratio_ja"))
         if zoning_name and not zoning_code:
@@ -337,7 +327,7 @@ def from_reinfolib(address: str) -> Optional[GeoLookupResult]:
         props = fire_feature.get("properties", {})
         fire_name = props.get("fire_prevention_ja")
         if fire_name:
-            fire_district = FIRE_NAME_TO_CODE.get(fire_name, "no_district")
+            fire_district = fire_code_of(fire_name) or "no_district"
 
     # 都市計画区域・区域区分 (XKT001)
     city_planning_classification: Optional[str] = None

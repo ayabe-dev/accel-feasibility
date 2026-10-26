@@ -80,6 +80,7 @@ def generate_markdown_report(
     sections: List[str] = []
 
     sections.append(_section_header(report))
+    sections.append(_section_license_judgment(report))
     sections.append(_section_executive_summary(report, weights))
     sections.append(_section_property_overview(report))
     sections.append(_section_location_regulations(report))
@@ -108,6 +109,113 @@ def generate_markdown_report(
 # ----------------------------------------------------------------------
 # セクション生成
 # ----------------------------------------------------------------------
+
+
+def _section_license_judgment(report: FeasibilityReport) -> str:
+    """旅館業許可の可否（主判定）。根拠は条文の原文と出典URLつきで出す."""
+    j = getattr(report, "license_judgment", None)
+    if j is None:
+        return ""
+
+    lines: List[str] = ["## 0. 旅館業許可の可否（主判定）", ""]
+    lines.append(f"### {j.verdict_label}")
+    lines.append("")
+    lines.append(j.headline)
+    lines.append("")
+    lines.append("| 項目 | 内容 |")
+    lines.append("|------|------|")
+    lines.append(f"| 対象業態 | {j.business_label} |")
+    lines.append(f"| 自治体 | {j.municipality_name or '未特定'} |")
+    if j.permit_authority:
+        lines.append(f"| 許可権者・窓口 | {j.permit_authority} |")
+    lines.append(f"| 情報の充足率 | {j.data_completeness * 100:.0f}% |")
+    lines.append(f"| 判定の信頼度 | {j.confidence} |")
+    if j.researched_on:
+        lines.append(f"| 自治体条例の調査日 | {j.researched_on} |")
+    lines.append("")
+    lines.append(f"> {j.disclaimer}")
+    lines.append("")
+
+    if j.next_actions:
+        lines.append("### 0-1. 次にやること")
+        lines.append("")
+        for i, a in enumerate(j.next_actions, 1):
+            lines.append(f"{i}. {a}")
+        lines.append("")
+
+    if j.research_note:
+        lines.append(f"> ⚠️ {j.research_note}")
+        lines.append("")
+    elif j.research_summary:
+        lines.append("### 0-2. 自治体条例の調査結果")
+        lines.append("")
+        lines.append(j.research_summary)
+        lines.append("")
+        if j.unresolved:
+            lines.append("**確認できなかった論点（保健所へ直接確認）**")
+            lines.append("")
+            for u in j.unresolved:
+                lines.append(f"- {u}")
+            lines.append("")
+
+    lines.append("### 0-3. 許可までに越えるゲート")
+    lines.append("")
+    lines.append(
+        "旅館業法3条の不許可事由を起点に、許可までに越える必要がある要件を並べています。"
+        "⚠️未検証と記した根拠は判定には使用していません。"
+    )
+    lines.append("")
+    lines.append("| 区分 | ゲート | 判定 | 根拠信頼度 |")
+    lines.append("|------|--------|------|-----------|")
+    for g in j.gates:
+        lines.append(
+            f"| {g.category} | {g.title} | {g.status_label} | {g.confidence} |"
+        )
+    lines.append("")
+
+    for g in j.gates:
+        lines.append(f"#### {g.status_label}　{g.title}")
+        lines.append("")
+        lines.append(g.finding)
+        lines.append("")
+        if g.remedy:
+            lines.append(f"**対応**：{g.remedy}")
+            lines.append("")
+        if g.data_gaps:
+            lines.append("**確定に必要な情報**")
+            lines.append("")
+            for gap in g.data_gaps:
+                lines.append(f"- {gap}")
+            lines.append("")
+        if g.evidences:
+            lines.append("**根拠**")
+            lines.append("")
+            for e in g.evidences:
+                lines.append(e.to_markdown())
+                lines.append("")
+
+    if j.alternatives:
+        lines.append("### 0-4. 別ルートの見込み")
+        lines.append("")
+        for alt in j.alternatives:
+            lines.append(f"#### {alt.verdict_label}　{alt.label}")
+            lines.append("")
+            lines.append(alt.summary)
+            lines.append("")
+            if alt.blockers:
+                lines.append("**越えられない要因**")
+                lines.append("")
+                for b in alt.blockers:
+                    lines.append(f"- ⛔ {b}")
+                lines.append("")
+            if alt.conditions:
+                lines.append("**条件**")
+                lines.append("")
+                for c in alt.conditions:
+                    lines.append(f"- {c}")
+                lines.append("")
+
+    return "\n".join(lines)
 
 
 def _section_header(report: FeasibilityReport) -> str:

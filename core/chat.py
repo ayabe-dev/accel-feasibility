@@ -255,7 +255,12 @@ def provider_status() -> Dict[str, Any]:
                 active = name
                 break
     models = {
-        "gemini": os.getenv("GEMINI_CHAT_MODEL", os.getenv("GEMINI_MODEL", "gemini-flash-latest")),
+        # モデル名はハードコードしない（廃止で全滅した反省。core/gemini_models が正本）
+        "gemini": (
+            os.getenv("GEMINI_CHAT_MODEL")
+            or os.getenv("GEMINI_MODEL")
+            or _gemini_chat_model_default()
+        ),
         "claude": os.getenv("CLAUDE_CHAT_MODEL", "claude-opus-5"),
         "openai": os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
     }
@@ -266,6 +271,14 @@ def provider_status() -> Dict[str, Any]:
         "model": models.get(active) if active else None,
         "ready": active is not None,
     }
+
+
+def _gemini_chat_model_default() -> str:
+    """チャットは速度優先。候補チェーンの先頭を使う."""
+    from . import gemini_models
+
+    chain = gemini_models.candidate_chain(purpose="fast")
+    return chain[0] if chain else "gemini-flash-latest"
 
 
 def _gemini_stream(model: str, system: str, history: List[Dict[str, str]]) -> Iterator[str]:
